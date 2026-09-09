@@ -1,0 +1,5 @@
+﻿NIU,fecha_corte_lista,fecha_visita,hallazgo,accion,observaciones
+# Borra estas líneas de ejemplo (las que empiezan por #) y llena una fila por cliente visitado.
+# NIU: el del cliente tal como aparece en la lista. fecha_corte_lista: el corte de la lista (columna fecha_corte, formato AAAA-MM).
+# fecha_visita: AAAA-MM-DD. hallazgo: uno de los valores del catálogo de abajo. accion y observaciones: texto libre.
+#   MEDIDOR_DANADO | MEDIDOR_MANIPULADO_O_FRAUDE | ERROR_DE_LECTURA_O_FACTURACION | ACOMETIDA_O_RED_CON_FALLA | CONEXION_IRREGULAR | PREDIO_DESOCUPADO | CAMBIO_DE_ACTIVIDAD_O_HABITO | AUTOGENERACION | CLIENTE_RETIRADO | SIN_NOVEDAD | NO_UBICADO | PENDIENTE

@@ -1,0 +1,1 @@
+python -m pip install -r C:\Users\Home\Documents\GitHub\ProyectoEBSA\Pipeline_Ebsa\requirements.txt

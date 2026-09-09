@@ -1,0 +1,32 @@
+# Proyecto EBSA — dependencias
+#
+# Este archivo fija las versiones MÍNIMAS con las que se construyó el proyecto.
+# Para dejar constancia de las versiones EXACTAS instaladas en la máquina que
+# entrenó los modelos (necesario para que los .joblib carguen igual en otra
+# máquina), correr una vez:
+#
+#     python generar_lock_entorno.py
+#
+# que escribe requirements-lock.txt. Para reproducir el entorno en otra máquina:
+#
+#     pip install -r requirements-lock.txt
+#
+# Los .joblib de LightGBM / XGBoost / CatBoost / scikit-learn dependen de la
+# versión: un cambio mayor de versión puede impedir cargarlos. Si eso pasa,
+# la salida es correr el pipeline en modo reentrenar con las versiones nuevas.
+
+pandas>=2.2
+numpy>=1.26
+pyarrow>=15
+scikit-learn>=1.4
+lightgbm>=4.3
+xgboost>=2.0
+catboost>=1.2
+optuna>=3.6
+joblib>=1.3
+matplotlib>=3.8
+openpyxl>=3.1          # leer los .xlsx de la empresa (notebook 1)
+jupyter>=1.0
+nbformat>=5.9
+nbclient>=0.9          # pipeline_mensual.py ejecuta los notebooks con esto
+streamlit>=1.35        # app_ebsa.py (página web)
