@@ -26,14 +26,16 @@ historico_YYYY.parquet):
 Qué revisa (cada chequeo dice si es ERROR o AVISO)
 --------------------------------------------------
   columnas_esenciales   ERROR si falta alguna columna que usa el pipeline.
-  clientes_caida        ERROR si el número de NIU del mes cae más de 10% frente
-                        a la mediana de los 12 previos (archivo truncado).
+  clientes_caida        ERROR si el número de NIU URBANOS del mes cae más de 10%
+                        frente a la mediana de los 12 previos (archivo truncado).
+                        Los rurales se comparan aparte y solo AVISAN: un archivo
+                        mensual puede llegar sin lecturas rurales y es normal.
   clientes_subida       AVISO si sube más de 15%. No es error: el archivo del mes
                         más reciente suele traer fila para todos los clientes,
                         rurales sin lectura trimestral incluidos (enero 2026:
                         579 mil frente a 358 mil de un mes normal).
-  consumo_total         ERROR si el consumo total del mes queda por debajo del
-                        55% de la mediana previa. (El último mes siempre llega
+  consumo_total         ERROR si el consumo total URBANO del mes queda por debajo
+                        del 55% de la mediana previa (rural: AVISO). (El último mes siempre llega
                         algo bajo por las lecturas trimestrales pendientes de
                         los rurales: el detector del borde se encarga de eso.
                         Este tope solo atrapa un archivo truncado de verdad.)
@@ -65,6 +67,9 @@ __all__ = ["validar_mes_entrante", "CICLOS_CONOCIDOS"]
 # (lectura trimestral) o urbano y añadirlo en Preprocesamiento (CICLOS_RURALES).
 CICLOS_CONOCIDOS = [0, 1, 2, 3, 4, 5, 6, 7, 9, 10, 11, 12, 13, 15, 19, 21, 22, 23, 33, 38, 50, 90]
 
+# Ciclos rurales (lectura trimestral). Misma lista que Preprocesamiento (CICLOS_RURALES).
+CICLOS_RURALES = [10, 11, 12, 13, 19, 21, 22, 23, 38]
+
 COLUMNAS_ESENCIALES = [
     "NIU", "periodo", "consumo_kwh_raw", "dias_facturados_max",
     "fecha_lectura_anterior", "fecha_lectura_actual",
@@ -87,6 +92,7 @@ def validar_mes_entrante(
     historico: pd.DataFrame,
     col_periodo: str = "periodo",
     ciclos_conocidos=CICLOS_CONOCIDOS,
+    ciclos_rurales=CICLOS_RURALES,
     meses_referencia: int = 12,
     caida_max_clientes_pct: float = 10.0,
     subida_max_clientes_pct: float = 15.0,
@@ -129,9 +135,6 @@ def validar_mes_entrante(
     meses = np.sort(datos["mes"].unique())
     mes_actual = pd.Timestamp(meses[-1])
     previos = meses[-1 - meses_referencia:-1] if len(meses) > 1 else []
-    actual = datos[datos["mes"].eq(mes_actual)]
-    ref = datos[datos["mes"].isin(previos)] if len(previos) else datos.iloc[0:0]
-
     # --- periodo esperado ---
     if len(meses) > 1:
         esperado = pd.Timestamp(meses[-2]) + pd.DateOffset(months=1)
@@ -142,29 +145,40 @@ def validar_mes_entrante(
             else "hay un salto de meses entre el archivo anterior y este",
         ))
 
-    # --- clientes vs previos ---
-    # Una CAÍDA de clientes es lo peligroso (archivo truncado): ERROR.
-    # Un AUMENTO no daña nada y es normal en el archivo real: el mes más
-    # reciente puede traer fila para todos los clientes (rurales incluidos,
-    # aunque su lectura trimestral aún no haya llegado). Solo se avisa.
+    # --- clientes vs previos, POR ZONA ---
+    # Una CAÍDA de clientes urbanos es lo peligroso (archivo truncado): ERROR.
+    # Los rurales se leen por trimestres: un mes puede llegar sin ninguna fila
+    # rural y no es un archivo malo, así que en rural solo se AVISA.
+    # Un AUMENTO no daña nada (el archivo puede traer a todos los clientes,
+    # rurales sin lectura incluidos): solo se avisa.
+    ciclo_num = pd.to_numeric(datos["ciclo"], errors="coerce")
+    datos["zona"] = np.where(ciclo_num.isin(list(ciclos_rurales)), "RURAL", "URBANO")
+    actual = datos[datos["mes"].eq(mes_actual)]
+    ref = datos[datos["mes"].isin(previos)] if len(previos) else datos.iloc[0:0]
+
     n_actual = int(actual["NIU"].nunique())
-    if len(ref):
-        n_ref = float(ref.groupby("mes")["NIU"].nunique().median())
-        cambio = (n_actual - n_ref) / n_ref * 100
-        filas.append(_fila(
-            "clientes_caida", "ERROR", cambio >= -caida_max_clientes_pct, n_actual, int(n_ref),
-            f"{cambio:+.1f}% frente a la mediana de los {len(previos)} meses previos "
-            f"(error si cae más de {caida_max_clientes_pct:.0f}%)",
-        ))
-        filas.append(_fila(
-            "clientes_subida", "AVISO", cambio <= subida_max_clientes_pct, n_actual, int(n_ref),
-            f"{cambio:+.1f}% frente a la mediana previa (aviso si sube más de "
-            f"{subida_max_clientes_pct:.0f}%: suele ser que el archivo del mes trae a todos "
-            "los clientes, rurales sin lectura incluidos)",
-        ))
-    else:
-        filas.append(_fila("clientes_caida", "AVISO", True, n_actual, np.nan,
-                           "sin meses previos para comparar"))
+    for zona in ("URBANO", "RURAL"):
+        nivel = "ERROR" if zona == "URBANO" else "AVISO"
+        act_z = actual[actual["zona"].eq(zona)]
+        ref_z = ref[ref["zona"].eq(zona)]
+        n_z = int(act_z["NIU"].nunique())
+        if len(ref_z):
+            n_ref = float(ref_z.groupby("mes")["NIU"].nunique().median())
+            cambio = (n_z - n_ref) / n_ref * 100 if n_ref > 0 else 0.0
+            filas.append(_fila(
+                f"clientes_caida_{zona.lower()}", nivel, cambio >= -caida_max_clientes_pct, n_z, int(n_ref),
+                f"{cambio:+.1f}% frente a la mediana de los {len(previos)} meses previos "
+                + (f"(error si cae más de {caida_max_clientes_pct:.0f}%)" if zona == "URBANO"
+                   else "(aviso: un mes sin lecturas rurales es normal; el borde por zona lo maneja)"),
+            ))
+            filas.append(_fila(
+                f"clientes_subida_{zona.lower()}", "AVISO", cambio <= subida_max_clientes_pct, n_z, int(n_ref),
+                f"{cambio:+.1f}% frente a la mediana previa (aviso si sube más de "
+                f"{subida_max_clientes_pct:.0f}%: suele ser que el archivo trae a todos los clientes)",
+            ))
+        else:
+            filas.append(_fila(f"clientes_caida_{zona.lower()}", "AVISO", True, n_z, np.nan,
+                               "sin meses previos para comparar"))
 
     # --- duplicados dentro del mes ---
     dup = int(actual.duplicated(subset=["NIU"]).sum())
@@ -179,19 +193,24 @@ def validar_mes_entrante(
         round(pct_nulos, 2), nulos_max_consumo_pct,
         "% de filas del mes sin consumo",
     ))
-    if len(ref):
-        total_ref = float(
-            ref.assign(c=pd.to_numeric(ref["consumo_kwh_raw"], errors="coerce"))
-            .groupby("mes")["c"].sum().median()
-        )
-        total_actual = float(consumo.sum())
-        pct = total_actual / total_ref * 100 if total_ref > 0 else np.nan
-        filas.append(_fila(
-            "consumo_total", "ERROR", pct >= consumo_min_pct,
-            round(total_actual), round(total_ref),
-            f"{pct:.1f}% de la mediana previa (mínimo {consumo_min_pct:.0f}%). "
-            "Algo por debajo de 100% es normal: a los rurales les falta la lectura trimestral.",
-        ))
+    for zona in ("URBANO", "RURAL"):
+        nivel = "ERROR" if zona == "URBANO" else "AVISO"
+        act_z = actual[actual["zona"].eq(zona)]
+        ref_z = ref[ref["zona"].eq(zona)]
+        if len(ref_z):
+            total_ref = float(
+                ref_z.assign(c=pd.to_numeric(ref_z["consumo_kwh_raw"], errors="coerce"))
+                .groupby("mes")["c"].sum().median()
+            )
+            total_actual = float(pd.to_numeric(act_z["consumo_kwh_raw"], errors="coerce").sum())
+            pct = total_actual / total_ref * 100 if total_ref > 0 else np.nan
+            filas.append(_fila(
+                f"consumo_total_{zona.lower()}", nivel, (pct >= consumo_min_pct) or not np.isfinite(pct),
+                round(total_actual), round(total_ref),
+                f"{pct:.1f}% de la mediana previa (mínimo {consumo_min_pct:.0f}%). "
+                + ("Algo por debajo de 100% es normal en el último mes." if zona == "URBANO"
+                   else "Los rurales dependen de la lectura trimestral: el borde por zona lo maneja."),
+            ))
 
     # --- tarifa ---
     tarifa = pd.to_numeric(actual["tarifa_aplicada_kwh"], errors="coerce")

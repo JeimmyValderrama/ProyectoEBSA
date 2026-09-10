@@ -4,18 +4,22 @@ Análisis, agrupamiento, detección de caída y pronóstico del consumo eléctri
 
 - **Clientes:** ~592.000 NIU.
 - **Historia:** enero 2022 → enero 2026 (49 meses) en la extracción actual; crece un mes con cada archivo nuevo de la empresa.
-- **Fuente:** los archivos mensuales XLSX/CSV que entrega la empresa (formato TC2), en `Datos_Ebsa\00_formato_TC2\`. **Nunca se modifican**: el pipeline los lee tal cual llegan.
+- **Fuente:** los archivos mensuales XLSX/CSV que entrega la empresa (formato TC2), en `Datos_Ebsa\00_formato_TC2\`, y el archivo de usuarios atendidos por otros comercializadores, en `Datos_Ebsa\00_otros_comercializadores\`. **Nunca se modifican**: el pipeline los lee tal cual llegan.
+- **Glosario:** los códigos del TC2 (ciclo, clase de servicio, tipo de medidor, tipo de lectura, tipo de factura) se traducen a texto con `utilidades_glosario.py` (tomado de `GLOSARIO_EBSA.xlsx`), y los perfiles técnicos P0–P4 se muestran como **grupos de consumo**: Intermitente, Pequeño (< 500 kWh/mes), Mediano (500–5.000), Grande (≥ 5.000) y Sin historia suficiente.
 
 ---
 
-## 1. Qué entrega el proyecto (los dos productos)
+## 1. Qué entrega el proyecto (los tres productos)
 
-El proyecto termina en **dos productos independientes**. Cada uno tiene su propio modelo final y sus propias salidas.
+El proyecto termina en **tres productos independientes**. Cada uno tiene su propio modelo final y sus propias salidas.
 
 | Producto | Pregunta que responde | Notebooks | Salida principal |
 |---|---|---|---|
 | **A. Gestión de caída de consumo** | ¿Qué clientes están dejando de consumir, cuánto vale esa pérdida, en qué ciclo de lectura están y por dónde empieza la cuadrilla? Incluye, por cliente, si el modelo prevé que el **próximo mes** siga cayendo o se recupere. | 9 → 10 → 11 | `07_gestion_caida\gestion_caida_operativa.csv` y `gestion_caida_gerencial.csv` |
 | **B. Pronóstico de consumo a 6 meses** | ¿Cuánto va a consumir cada cliente en cada uno de los próximos 6 meses? | 1 → 8 (el modelo se entrena en el 8) | `04_pronostico\modelo_final\predicciones_segmentadas_optimizadas_6_meses.parquet` |
+| **C. Riesgo de fuga a otro comercializador** | ¿Qué clientes tienen más probabilidad de irse a otro comercializador en los próximos 6 meses, cuánto facturan hoy y quiénes ya se fueron? Aprende de los usuarios que la empresa reporta atendidos por otros comercializadores. | 14 | `10_riesgo_fuga\riesgo_fuga_clientes.csv` y `lista_riesgo_fuga_gerencial.csv` |
+
+Los tres se entregan también **por grupo de consumo**, con nombres de negocio y las columnas del glosario, en `11_exportes_negocio\` (paso 15), que es lo que descarga la página.
 
 El producto A **usa** una columna del producto B (`pred_1m_kwh`, el pronóstico del mes siguiente) para la trayectoria, por eso el notebook 8 se corre antes que el 11.
 
@@ -29,7 +33,7 @@ Dos carpetas, separadas a propósito: el **código** en GitHub y los **datos** e
 
 | Qué | Ruta | Dónde se define |
 |---|---|---|
-| **Código** (13 notebooks, `utilidades_borde.py`, `utilidades_calidad.py`, `pipeline_mensual.py`, `app_ebsa.py`, `preparar_carpeta_datos.py`) | `C:\Users\Home\Documents\GitHub\ProyectoEBSA\Pipeline_Ebsa` | Es donde se abren los notebooks y desde donde se corren los scripts. Los dos `utilidades_*.py` **deben estar en esta misma carpeta** para que el `import` funcione. |
+| **Código** (15 notebooks, `utilidades_borde.py`, `utilidades_calidad.py`, `utilidades_glosario.py`, `pipeline_mensual.py`, `app_ebsa.py`, `preparar_carpeta_datos.py`) | `C:\Users\Home\Documents\GitHub\ProyectoEBSA\Pipeline_Ebsa` | Es donde se abren los notebooks y desde donde se corren los scripts. Los tres `utilidades_*.py` **deben estar en esta misma carpeta** para que el `import` funcione. |
 | **Datos** (archivos de la empresa, intermedios, modelos, salidas) | `C:\Users\Home\Documents\Datos_Ebsa` | Variable `BASE_DIR` (o `DATA_DIR` en Exploración) en la primera celda de cada notebook, y `DATOS_POR_DEFECTO` en los scripts. Todos la leen primero de la variable de entorno `EBSA_DATOS` y, si no existe, usan esta ruta. |
 
 Estructura completa de la carpeta de datos:
@@ -38,6 +42,7 @@ Estructura completa de la carpeta de datos:
 C:\Users\Home\Documents\Datos_Ebsa\
 │
 ├── 00_formato_TC2\                ← los XLSX/CSV mensuales de la empresa (formato TC2). NO SE TOCAN. Entrada del paso 1.
+├── 00_otros_comercializadores\    ← el XLSX de la empresa con los usuarios atendidos por otros comercializadores. NO SE TOCA. Entrada del paso 14.
 ├── 01_historico_procesado\        ← Paso 1 (Exploración): historico_2022.parquet ... historico_2026.parquet
 │   └── detalle_mensual\              (detalle factura a factura, por archivo; solo auditoría)
 ├── 02_serie_reconstruida\         ← Paso 2 (Reconstrucción rural) + control_calidad_mes_entrante.csv
@@ -54,10 +59,16 @@ C:\Users\Home\Documents\Datos_Ebsa\
 │   ├── historial\                    (una copia de la lista operativa por corte)
 │   └── retroalimentacion\            (plantilla y resultados de las visitas; Paso 13)
 ├── 08_seguimiento\                ← Paso 12   ★ PRECISIÓN EN VIVO Y QUÉ PASÓ CON LAS LISTAS
-└── 09_registro_corridas\          ← pipeline_mensual.py: un registro por corrida (notebooks ejecutados + resumen)
+├── 09_registro_corridas\          ← pipeline_mensual.py: un registro por corrida (notebooks ejecutados + resumen)
+├── 10_riesgo_fuga\                ← Paso 14   ★ RIESGO DE FUGA A OTRO COMERCIALIZADOR (modelo, listas, seguimiento)
+│   └── historial\                   (una copia de la lista de riesgo por corte)
+└── 11_exportes_negocio\           ← Paso 15   ★ ARCHIVOS POR GRUPO DE CONSUMO PARA DESCARGAR (pronóstico, caída, fuga)
+    ├── pronostico_6_meses\
+    ├── lista_caida\
+    └── riesgo_fuga\
 
 C:\Users\Home\Documents\GitHub\ProyectoEBSA\
-└── Pipeline_Ebsa\                 ← EL CÓDIGO: 13 notebooks, utilidades_*.py, pipeline_mensual.py, app_ebsa.py
+└── Pipeline_Ebsa\                 ← EL CÓDIGO: 15 notebooks, utilidades_*.py, pipeline_mensual.py, app_ebsa.py
 ```
 
 `python preparar_carpeta_datos.py` (desde `Pipeline_Ebsa`) crea las carpetas vacías de `Datos_Ebsa` y dice qué copiar del proyecto anterior (§7.0).
@@ -119,6 +130,40 @@ Carpeta: `Datos_Ebsa\04_pronostico\modelo_final\`
 | `metricas_sistema_ganador_backtest_optimizado.csv` | Error global por horizonte en el backtest. |
 | `real_vs_pronosticado_sistema_optimizado_backtest.parquet` | Real vs. pronosticado del backtest, para gráficas de "cómo le fue al modelo". |
 
+### 3.2b Producto C — Riesgo de fuga a otro comercializador (lo que se muestra)
+
+Carpeta `10_riesgo_fuga\` (notebook 14). Todo con corte en el último mes consolidado, el mismo de la lista de caída.
+
+| Archivo | Qué es |
+|---|---|
+| `riesgo_fuga_clientes.csv` | Todos los clientes puntuados: `prob_fuga_6m` (probabilidad de salir en los próximos 6 meses, en escala real), `nivel_riesgo` (ALTO / MEDIO / BAJO), `valor_en_riesgo_mes` (consumo promedio 6 meses × tarifa **real**; sin tarifa queda vacío), `valor_esperado_perdida_mes` (probabilidad × valor; es el orden del `ranking`), `senales` (en texto: caída reciente, meses en cero, zona con más salidas, tamaño), zona y clase en texto, grupo de consumo, tipo de medidor y de lectura, promedio semestral, recurrencia frente a cortes anteriores (`estado_en_lista`). |
+| `lista_riesgo_fuga_gerencial.csv` | Solo ALTO y MEDIO, ordenados por pérdida esperada. `lista_riesgo_fuga_por_zona.csv`: los mismos, por zona y probabilidad. |
+| `clientes_con_otro_comercializador.csv` | Los NIU del archivo de la empresa, con su estado (`CON OTRO COMERCIALIZADOR`, `REGRESÓ A EBSA`, `SIN HISTORIA EN TC2`), comercializador, municipio, mes de salida y de dónde se dedujo, y lo que facturaban antes de irse. |
+| `vigilancia_mercado_no_regulado.csv` | Ciclo 33 (USUARIOS NO REGULADOS), clase IR o consumo ≥ 55.000 kWh/mes: por tamaño pueden negociar con cualquier comercializador. |
+| `perfil_clientes_que_se_fueron.csv` | Cómo son los que se fueron: por clase, zona, tamaño, comercializador y municipio. |
+| `resumen_riesgo_fuga_por_zona.csv`, `resumen_riesgo_fuga_por_grupo.csv` | Cuántos ALTO/MEDIO y cuánta pérdida esperada por zona y por grupo de consumo. |
+| `metricas_modelo_fuga.csv`, `importancia_variables_fuga.csv`, `hiperparametros_fuga.json`, `optuna_ensayos_fuga.csv` | Calidad del modelo evaluada por cortes en el tiempo (AUC, precisión y *lift* en el top 50/100/200/500), con la fila de los parámetros base y la de los elegidos; qué variables pesan; los hiperparámetros elegidos y los 30 ensayos de Optuna (semilla fija; el primer ensayo es siempre la configuración base). |
+| `seguimiento_riesgo_fuga.csv` | Para cada corte anterior: de los señalados ALTO/MEDIO, qué % efectivamente se fue en sus 6 meses, frente a la tasa base. |
+| `historial\riesgo_fuga_corte_AAAA-MM.csv` | Copia de cada corte (no se sobreescribe). |
+
+**Población.** Se puntúan las clases de servicio que aparecen entre los que ya se fueron (hoy comercial, industrial, oficial, acueductos y no regulados), sin alumbrado público, provisionales, ciclos internos (15, 90, 91, 94, 96, 98, 99) ni autogeneradores (ciclo 50). Si el archivo trae algún día un residencial, la población se amplía sola. Los que ya están con otro comercializador o en cero sostenido no se puntúan: van en `clientes_con_otro_comercializador.csv`.
+
+**Cómo se ve una salida en TC2.** En los datos reales, el cliente que se cambia **no desaparece**: sigue apareciendo con 0 kWh y solo meses después deja de estar en el archivo. Por eso el mes de salida es el más temprano entre su primer mes en el archivo de otros comercializadores, su primer mes de consumo cero sostenido (≥ 3 meses) y el mes siguiente a su última fila; y si algún día el TC2 trae el ciclo 97 (OTROS COMERCIALIZADORES), cuenta automáticamente.
+
+**Niveles.** ALTO: probabilidad ≥ 5 veces la tasa base o dentro del 1 % más alto; MEDIO: ≥ 2 veces la tasa base o dentro del 5 % más alto. Así siempre hay una lista corta para trabajar aunque el riesgo general sea bajo.
+
+### 3.2c Exportes por grupo de consumo (lo que descarga la página)
+
+Carpeta `11_exportes_negocio\` (notebook 15): `pronostico_6_meses\pronostico_6_meses_<grupo>.csv`, `lista_caida\lista_caida_<grupo>.csv`, `riesgo_fuga\riesgo_fuga_alto_y_medio_<grupo>.csv` y `riesgo_fuga_todos_los_puntuados_<grupo>.csv`, más uno `_todos_los_grupos` por producto, e `indice_exportes.csv` con archivo, grupo, filas y corte. Los grupos son: Intermitente (mediana 12 meses ≤ 10 kWh o ≥ 50 % de meses en cero), Pequeño (10–500 kWh/mes), Mediano (500–5.000), Grande (≥ 5.000) y Sin historia suficiente (< 6 meses válidos). Todas las listas traen `zona_nombre`, `clase_servicio_nombre`, `grupo_consumo`, `tipo_medidor_nombre`, `tipo_lectura_nombre`, `consumo_promedio_semestral_kwh`, `valor_facturado_mes` y `valor_facturado_origen` (dato del TC2, columna Q, cuando el histórico lo trae; si no, consumo × tarifa real del cliente — nunca una tarifa imputada).
+
+### 3.2d Regla de cero sostenido en el pronóstico
+
+Un cliente no intermitente (mediana de 12 meses ≥ 100 kWh) con sus **dos últimos meses consolidados por debajo del 5 % de su mediana** no tiene evidencia de recuperación; la línea base estacional y el modelo de los grandes tendían a "resucitarlo" porque hace un año consumía. Para esos clientes el pronóstico de los 6 meses es persistencia del último valor y la columna `modelo_Nm` dice `REGLA_CERO_SOSTENIDO`. Se aplica también en el backtest (las métricas la reflejan), no aplica a intermitentes ni a meses rurales provisionales, y deja de aplicar sola el mes que vuelva a haber consumo. Efecto en la lista de caída: esos clientes ya no salen como "RECUPERACION_PREVISTA".
+
+### 3.2e Versiones de los modelos (`12_versiones_modelos\`)
+
+Cada reentrenamiento guarda una copia del modelo con el corte en el nombre (`pronostico_corte_AAAA-MM.joblib`, `agrupamiento_...`, `criterios_caida_...`, `riesgo_fuga_...`) y una fila en `registro_versiones.csv`; cada corrida anota en `registro_uso.csv` qué versión usó para qué corte. `pipeline_mensual.py --modo aplicar --version-modelo AAAA-MM` corre con una versión concreta (para volver atrás o para comparar). El seguimiento (`08_seguimiento`) trae `fecha_corte_modelo` y `meses_desde_entrenamiento` en cada fila, que es lo que permite ver el deterioro por versión.
+
 ### 3.3 Seguimiento — precisión en vivo (lo que se muestra)
 
 Carpeta: `Datos_Ebsa\08_seguimiento\` (notebook 12). Se llena mes a mes: solo puede evaluar meses que ya quedaron consolidados, así que en la primera corrida está vacío.
@@ -156,9 +201,9 @@ Todos los notebooks se corren de arriba abajo, con **kernel reiniciado**, en est
 
 | # | Notebook | Qué hace | Necesita | Produce en |
 |---|---|---|---|---|
-| 1 | `Exploracion_inicial.ipynb` | Lee todos los XLSX/CSV de `00_formato_TC2\`, unifica encabezados (esquema canónico + alias), guarda el detalle y un resumen NIU × mes por año. Analiza presencia mensual y periodicidad. | `00_formato_TC2\` | `01_historico_procesado\historico_YYYY.parquet`, `01_historico_procesado\detalle_mensual\` |
+| 1 | `Exploracion_inicial.ipynb` | Lee los XLSX/CSV de `00_formato_TC2\` (el año-mes sale del nombre del archivo), unifica encabezados (esquema canónico + alias), guarda el detalle y un resumen NIU × mes por archivo, y **anualiza**: cada mes entra a su `historico_YYYY.parquet` conservando los meses que ya estaban; si un mes ya existía y vuelve a llegar, se reemplaza y lo avisa. Los archivos ya procesados en corridas anteriores no se vuelven a leer (caché en `resumen_por_archivo\`). Termina con la cobertura del histórico completo (clientes por mes, huecos). | `00_formato_TC2\` | `01_historico_procesado\historico_YYYY.parquet`, `detalle_mensual\`, `resumen_por_archivo\` |
 | 2 | `Reconstruccion_serie_tiempo_consumo_rural.ipynb` | Une los `historico_YYYY`, detecta lecturas largas (75–129 días = trimestrales, rurales) y reparte ese consumo en los meses que cubre. Deja una serie **mensual** por cliente. Valida que el consumo total se conserva. | Salida de 1 | `02_serie_reconstruida\` |
-| 3 | `Preprocesamiento_serie_tiempo_para_modelado.ipynb` | Excluye alumbrado público (ciclo 15 + clase AP), marca ciclos rurales (10, 11, 12, 13, 19, 21, 22, 23, 38), deja la serie lista para modelar con `es_rural`, `consumo_kwh_mensual`, `regimen`, etc. Guarda el ciclo de cada NIU. | Salida de 2 | `03_serie_modelado\` ★ |
+| 3 | `Preprocesamiento_serie_tiempo_para_modelado.ipynb` | Excluye alumbrado público (ciclo 15 + clase AP) y autogeneradores (ciclo 50, decisión de la empresa: consumen menos de la red por diseño; lista en `nius_autogeneradores_excluidos.parquet`), marca ciclos rurales (10, 11, 12, 13, 19, 21, 22, 23, 38), deja la serie lista para modelar con `es_rural`, `consumo_kwh_mensual`, `regimen`, etc. Guarda el ciclo de cada NIU. **Calcula el corte por zona** (`cortes_por_zona.csv`) y marca cada fila con `estado_mes` CONSOLIDADO / PROVISIONAL (§6). | Salida de 2 | `03_serie_modelado\` ★ |
 | 4 | `Modelado_prediccion_consumo_3_6_meses.ipynb` | **Primer modelo** (un solo modelo para todos los clientes, muestra de 50.000). Sirvió para demostrar que hacía falta segmentar. Se conserva como referencia; **no alimenta nada posterior**. | Salida de 3 | `04_pronostico\desarrollo_01_modelo_unico\` |
 | 5 | `Modelado_prediccion_consumo_segmentado_3_6_meses.ipynb` | Introduce los **perfiles** (P0 intermitente, P1 regular, P2 alto, P3 grande, P4 insuficiente), un modelo por perfil × horizonte, y el blend ML + línea base. Solo LightGBM. **Tampoco alimenta nada posterior.** | Salida de 3 | `04_pronostico\desarrollo_02_segmentado\` |
 | 6 | `Modelado_segmentado_comparacion_modelos_3_6_meses.ipynb` | Compara LightGBM, XGBoost y CatBoost por perfil × horizonte, elige ganador, hace backtest y pronóstico. **Sus CSV de backtest los lee el notebook 8** para la comparación original vs optimizado. | Salida de 3 | `04_pronostico\modelo_final\` (`seleccion_modelo_por_perfil_horizonte.csv`, `metricas_sistema_*.csv`, `modelos_ganadores_segmentados.joblib`) |
@@ -169,7 +214,15 @@ Todos los notebooks se corren de arriba abajo, con **kernel reiniciado**, en est
 | 11 | `Priorizacion_gestion_caida.ipynb` | **Listas de gestión.** Cruza la caída con ciclo, tarifa real, estrato, clase y tramo; calcula valor en riesgo; añade trayectoria con `pred_1m_kwh` del 8; cruza con `historial\` para saber si cada cliente es nuevo o lleva meses en la lista; guarda la copia del corte. | Salida de 3, 8, 9, 10 + `01_historico_procesado\` (tarifa) | `07_gestion_caida\` |
 | 12 | `Seguimiento_pronostico_mensual.ipynb` | **Precisión en vivo.** Toma cada pronóstico de `historial_pronosticos\` y cada lista de `07_gestion_caida\historial\`, y los compara con el consumo real de los meses que ya quedaron consolidados. No entrena nada; recalcula todo en cada corrida. | Salida de 3, 8, 11 | `08_seguimiento\` |
 | 13 | `Evaluacion_retroalimentacion_gestion.ipynb` | **Resultados de campo.** Lee los `resultado_gestion*.csv` que llene la empresa, los cruza con la lista de la que salió cada cliente y mide la precisión de la lista. Si no hay archivos, lo dice y termina sin error. | Salida de 11 + archivos de visitas | `07_gestion_caida\retroalimentacion\` |
-| — | `utilidades_borde.py` | Módulo Python (no es notebook). Detecta el borde provisional. Lo importan 8, 9, 10 y 12. | — | — |
+| 14 | `Riesgo_fuga_comercializador.ipynb` | **Riesgo de fuga.** Lee `00_otros_comercializadores\`, ubica el mes de salida de cada cliente que se fue, define la población elegible, calcula variables de consumo y atributos en cada corte histórico y entrena LightGBM con evaluación por cortes en el tiempo y búsqueda de hiperparámetros con Optuna sobre esa validación (modo *reentrenar*, semilla fija; con menos de 20 ejemplos usa un puntaje de similitud). Modo *aplicar*: carga `modelo_riesgo_fuga.joblib` y puntúa. Listas, recurrencia, vigilancia de no regulados y seguimiento de cortes anteriores. | Salida de 1, 3, 6 (corte) y 8 (perfiles) + archivo de otros comercializadores | `10_riesgo_fuga\` |
+| 15 | `Exportes_negocio.ipynb` | **Exportes por grupo.** Parte el pronóstico, la lista de caída y la de fuga por grupo de consumo, con las columnas del glosario, y escribe el índice. No calcula nada nuevo. | Salida de 8, 11 y 14 | `11_exportes_negocio\` |
+| — | `utilidades_borde.py` | Módulo Python (no es notebook). Detecta el borde provisional y calcula el corte por zona (`cortes_por_zona`, `leer_cortes_por_zona`). Lo importan 3, 8, 9, 10, 12 y 14. | — | — |
+| — | `utilidades_glosario.py` | Módulo Python (no es notebook). Traduce ciclo → zona, clase de servicio, tipo de medidor/lectura/factura y perfil → grupo de consumo; calcula el valor facturado. Lo importan 11, 14, 15 y la página. | — | — |
+| — | `utilidades_versiones.py` | Módulo Python. Guarda y resuelve versiones de los modelos (`12_versiones_modelos`). Lo importan 8, 9, 10 y 14. | — | — |
+| — | `simular_meses.py`, `comparar_modelos.py` | Simulación mes a mes con `--corte-max` (entrenar en un corte, aplicar mes a mes, reentrenar, comparar) y lectura del deterioro / mejora. Procedimiento completo en `COMANDOS.md` §4b. | — | — |
+| — | `verificar_corrida.py` | Verificador de la corrida (solo lee): consistencia de cortes, pronóstico, listas, exportes y registro. Correr después de cada `pipeline_mensual.py`. | — | — |
+| — | `estado_modelos.py` | ¿Toca reentrenar? Un veredicto por modelo (MANTENER / REVISAR / REENTRENAR) leyendo la antigüedad, el seguimiento en vivo y la deriva de criterios; imprime el comando exacto. Solo lee. | — | — |
+| — | `diagnostico_fuga.py`, `diagnostico_cruce_fuga.py` | Scripts de solo lectura con los que se estudió cómo se ven en TC2 los clientes que se fueron (no forman parte de la corrida). | — | — |
 | — | `utilidades_calidad.py` | Módulo Python (no es notebook). Compuerta de calidad del archivo entrante. Lo importa el 2. | — | — |
 | — | `pipeline_mensual.py` | Script que corre los notebooks en orden con kernel limpio (§7). | — | `09_registro_corridas\` |
 | — | `app_ebsa.py` | Página web (Streamlit) que muestra las salidas (§10). | — | — |
@@ -184,9 +237,10 @@ Todos los notebooks se corren de arriba abajo, con **kernel reiniciado**, en est
            ├─→ 6 → 7 → 8 ──────────────┐   Producto B (pronóstico 6 meses)
            └─→ 9 → 10 → 11 ←───────────┘   Producto A (gestión de caída; el 11 lee pred_1m_kwh del 8)
                           └─→ 12 → 13      Seguimiento y retroalimentación (leen los historiales de 8 y 11)
+1 + 3 + 8 + 10 ──→ 14 ──→ 15               Producto C (riesgo de fuga) y exportes por grupo (el 15 lee 8, 11 y 14)
 ```
 
-**Corrida mensual:** 1 → 2 → 3 → 8 → 9 → 10 → 11 → 12 → 13, en modo *aplicar*. Es exactamente lo que hace `python pipeline_mensual.py --modo aplicar` (§7). Los notebooks 4, 5, 6 y 7 son de desarrollo y solo se repiten si se quiere volver a elegir algoritmos o hiperparámetros.
+**Corrida mensual:** 1 → 2 → 3 → 8 → 9 → 10 → 11 → 12 → 13 → 14 → 15, en modo *aplicar*. Es exactamente lo que hace `python pipeline_mensual.py --modo aplicar` (§7). Los notebooks 4, 5, 6 y 7 son de desarrollo y solo se repiten si se quiere volver a elegir algoritmos o hiperparámetros.
 
 ---
 
@@ -194,9 +248,10 @@ Todos los notebooks se corren de arriba abajo, con **kernel reiniciado**, en est
 
 ### 5.1 `01_historico_procesado\` (notebook 1)
 
-- `historico_YYYY.parquet` — una fila por NIU × mes del año, con `consumo_kwh_raw`, `dias_facturados_max`, `fecha_lectura_anterior/actual`, `tarifa_aplicada_kwh`, `estrato`, `ciclo`, `clase_servicio`, `tipo_lectura`, etc. Es el resumen "tal como lo dice la empresa", **sin repartir** las lecturas trimestrales. De aquí sale la **tarifa real** que usa el notebook 11.
+- `historico_YYYY.parquet` — una fila por NIU × mes del año, con `consumo_kwh_raw`, `dias_facturados_max`, `fecha_lectura_anterior/actual`, `tarifa_aplicada_kwh`, `estrato`, `ciclo`, `clase_servicio`, `tipo_lectura`, `tipo_medidor`, `tipo_factura`, `consumo_promedio_semestral_kwh` y, desde esta versión, `valor_facturado_consumo` (columna Q del TC2, "Valor Facturación por Consumo Usuario ($)", sumada por NIU-mes). Un histórico generado con la versión anterior del notebook 1 no trae esa columna: las listas muestran entonces `valor_facturado_mes` = consumo × tarifa real (y lo dicen en `valor_facturado_origen`) hasta que se vuelva a correr el paso 1 desde los XLSX. Es el resumen "tal como lo dice la empresa", **sin repartir** las lecturas trimestrales. De aquí sale la **tarifa real** que usa el notebook 11.
 - `detalle_mensual\` — el detalle factura por factura de cada archivo original. Solo para auditar.
-- `historico_temporal.pkl` — respaldo temporal del notebook 1; se puede ignorar.
+- `resumen_por_archivo\` — el resumen NIU × mes de cada archivo TC2 ya procesado. Es la caché del notebook 1: si el archivo no cambió, no se vuelve a leer. Borrar esta carpeta obliga a releer todos los XLSX que estén en `00_formato_TC2\`.
+- `historico_temporal.pkl` — respaldo de la versión anterior del notebook 1; ya no se usa y se puede borrar.
 
 ### 5.2 `02_serie_reconstruida\` (notebook 2)
 
@@ -274,29 +329,34 @@ Descrito completo en §3.1.
 
 ---
 
-## 6. El mes provisional (importante para cualquier corrida futura)
+## 6. El mes provisional y el corte por zona (importante para cualquier corrida futura)
 
-Los clientes rurales se leen cada tres meses. En cualquier extracción, al **último mes** solo le ha llegado la lectura de una parte de ellos, así que ese mes aparece con la mitad del consumo normal (en la extracción de enero 2026: 47,9 % en rurales). No es un error: se completa hacia arriba cuando llegan las lecturas siguientes.
+Los clientes rurales se leen cada tres meses. En cualquier extracción, a los **últimos meses** solo les ha llegado la lectura de una parte de ellos, así que aparecen con una fracción del consumo normal (en la extracción de enero 2026: 47,9 % en rurales); y un archivo mensual puede llegar **sin ninguna fila rural** (febrero 2026 llegó solo con urbanos). No es un error: se completa hacia arriba cuando llegan las lecturas siguientes. Los urbanos, en cambio, se leen todos los meses y su último mes está completo.
 
-Por eso **ningún modelo debe entrenarse ni evaluarse con ese mes**. `utilidades_borde.py` lo detecta solo, en cada corrida, con dos pruebas (contra la mediana de los 12 meses previos **y** contra el mismo mes del año anterior, para no confundir estacionalidad con borde), y devuelve el último mes consolidado. Lo usan el notebook 8 (corte de entrenamiento y exclusión de objetivos provisionales de las métricas), el 9 y el 10 (fin de la ventana de 12 meses y de las ventanas de comparación: `MESES_RETROCESO_VENTANA = None` significa automático) y el 12 (solo evalúa contra meses consolidados).
+Por eso el proyecto trabaja con **un corte por zona**: `utilidades_borde.cortes_por_zona` detecta, en cada corrida y por separado, el último mes consolidado de los urbanos (normalmente el último del archivo) y el de los rurales (el último trimestre cerrado). Mira dos cosas de cada mes y zona: el **nivel** (consumo promedio de los clientes con fila: detecta lecturas parciales) y la **cobertura** (cuántos clientes tienen fila: detecta clientes enteros que faltan; en febrero 2026 solo 89 de ~219.000 rurales tenían fila y su promedio era normal, así que sin esta prueba febrero pasaba por consolidado y los rurales se quedaban sin pronóstico). Cada una se compara contra la mediana de los 12 meses previos **y** contra el mismo mes del año anterior, para no confundir estacionalidad con borde; el registro del paso 3 dice por cuál prueba cayó cada mes. `verificar_corrida.py` además comprueba que cada zona tenga pronóstico para la mayoría de sus clientes. El notebook 3 los escribe en `03_serie_modelado\cortes_por_zona.csv` y marca cada fila de la serie con `estado_mes` = CONSOLIDADO / PROVISIONAL. A partir de ahí:
 
-Cuando llegue el archivo de febrero 2026: enero se completa, febrero pasa a ser el provisional, y el detector mueve el corte solo. **No hay que cambiar ningún número a mano.** Si alguna vez el detector quiere retroceder más de 3 meses, se detiene con error: significa que la extracción llegó mal y hay que revisarla antes de seguir.
+- **Pronóstico (8):** los meses posteriores al corte de cada zona se enmascaran en la matriz (ni entrenan ni se evalúan); cada cliente se pronostica desde el corte de su zona. Un rural con corte diciembre recibe pronóstico para enero–junio: sus primeros meses ya pasaron pero aún no tienen lectura, y en la página y en los exportes se muestran como **"pronosticado, a la espera de la lectura trimestral"** hasta que llegue la real. La serie nunca mezcla real con pronosticado.
+- **Agrupamiento (9), caída (10), listas (11), riesgo de fuga (14):** las ventanas de cada cliente terminan en el corte de su zona. Toda fila lleva su `fecha_corte`; los archivos del mes se nombran por el corte urbano (el mes de la corrida).
+- **Seguimiento (12):** cada pronóstico y cada lista se evalúan contra un mes solo cuando ese mes ya está consolidado para la zona del cliente. Así el seguimiento urbano avanza cada mes aunque los rurales esperen.
+- **Compuerta de calidad (2):** compara urbanos contra urbanos y rurales contra rurales; una caída de clientes urbanos es ERROR, un mes sin filas rurales es solo AVISO.
+
+Cuando llegue el archivo de marzo: los urbanos avanzan a marzo; los rurales avanzan cuando sus lecturas cierren el trimestre. **No hay que cambiar ningún número a mano.** Si el detector quiere retroceder más de 3 meses en urbanos o más de 4 en rurales, se detiene con error: la extracción llegó mal y hay que revisarla antes de seguir.
 
 ---
 
 ## 7. Procedimiento cuando llega un mes nuevo
 
-1. Copiar el archivo nuevo de la empresa a `Datos_Ebsa\` (junto a los demás, sin renombrar ni editar).
+1. Copiar el archivo TC2 nuevo de la empresa a `Datos_Ebsa\00_formato_TC2\` sin editarlo. El nombre debe traer el año y el mes (`formato_tc2_202602.xlsx`, `..._20262.xlsx`), porque de ahí sale el periodo. No hace falta tener ahí los meses anteriores: el paso 1 agrega el mes nuevo al `historico_YYYY.parquet` de su año y conserva los que ya estaban (si el mes ya existía, lo reemplaza y avisa). Si se dejan todos los archivos en la carpeta, tampoco pasa nada: los ya procesados se reutilizan sin releerlos. Si la empresa entregó una versión nueva del archivo de usuarios de otros comercializadores, copiarla a `Datos_Ebsa\00_otros_comercializadores\` (se pueden dejar varias: el paso 14 quita las filas repetidas NIU-mes).
 2. Abrir una consola en `C:\Users\Home\Documents\GitHub\ProyectoEBSA\Pipeline_Ebsa` y correr:
 
    ```
    python pipeline_mensual.py --modo aplicar
    ```
 
-   Esto ejecuta 1 → 2 → 3 → 8 → 9 → 10 → 11 → 12 → 13 con kernel limpio, usando los modelos guardados (sin reentrenar). Tarda minutos. Cada notebook ejecutado, con sus salidas, queda en `Datos_Ebsa\09_registro_corridas\<fecha-hora>_aplicar\` como registro, junto a `resumen_corrida.txt`. Los notebooks originales no se tocan.
+   Esto ejecuta 1 → 2 → 3 → 8 → 9 → 10 → 11 → 12 → 13 → 14 → 15 con kernel limpio. Al terminar, el registro del paso 3 dice los dos cortes de la corrida (urbano y rural) y la página los muestra en la barra lateral, usando los modelos guardados (sin reentrenar). Tarda minutos. Cada notebook ejecutado, con sus salidas, queda en `Datos_Ebsa\09_registro_corridas\<fecha-hora>_aplicar\` como registro, junto a `resumen_corrida.txt`. Los notebooks originales no se tocan.
 3. Si un paso falla, el pipeline se detiene, muestra el error y dice con qué comando reanudar (`--desde N`). Los dos fallos "buenos" (los que protegen las salidas) son: la **compuerta de calidad** del notebook 2, cuando el archivo llegó con menos clientes, tarifas en cero o un ciclo desconocido; y el **detector del borde**, cuando quiere retroceder más de 3 meses. En ambos casos hay que mirar el archivo, no forzar la corrida.
-4. Revisar tres cosas en el registro: el bloque `CONTROL DE CALIDAD DEL MES ENTRANTE` (notebook 2), el bloque `DETECCIÓN DEL BORDE PROVISIONAL` (notebook 8) y el bloque de sesgo rural (notebook 11). Son los controles que dicen si el mes entró bien.
-5. Abrir la página (`streamlit run app_ebsa.py`, §10) o leer directamente `07_gestion_caida\`, `04_pronostico\modelo_final\` y `08_seguimiento\`.
+4. Revisar tres cosas en el registro: el bloque `CONTROL DE CALIDAD DEL MES ENTRANTE` (notebook 2), el bloque `CORTES POR ZONA` (notebook 3: qué mes quedó consolidado para urbanos y para rurales) y el bloque de sesgo rural (notebook 11). Son los controles que dicen si el mes entró bien.
+5. Abrir la página (`streamlit run app_ebsa.py`, §10) o leer directamente `07_gestion_caida\`, `04_pronostico\modelo_final\`, `08_seguimiento\`, `10_riesgo_fuga\` y, para repartir a negocio, `11_exportes_negocio\`.
 
 Otros usos del script:
 
@@ -304,21 +364,23 @@ Otros usos del script:
 python pipeline_mensual.py --lista                          # ver los pasos
 python pipeline_mensual.py --modo aplicar --desde 9         # reanudar desde el 9
 python pipeline_mensual.py --modo aplicar --solo 11,12,13   # solo esos pasos
+python pipeline_mensual.py --modo reentrenar --solo 14,15   # reentrenar solo el riesgo de fuga (minutos) y rehacer los exportes
 python pipeline_mensual.py --modo reentrenar                # corrida de reentrenamiento (§8)
 python pipeline_mensual.py --modo aplicar --datos "D:\otra\Datos_Ebsa"   # solo si los datos no están en Documentos\Datos_Ebsa
 ```
 
 ## 8. Modo aplicar y modo reentrenar
 
-Los notebooks 8, 9 y 10 leen la variable de entorno `EBSA_MODO` (la fija `pipeline_mensual.py`; si se abren a mano en Jupyter, vale el valor por defecto de la primera celda, `reentrenar`).
+Los notebooks 8, 9, 10 y 14 leen la variable de entorno `EBSA_MODO` (la fija `pipeline_mensual.py`; si se abren a mano en Jupyter, vale el valor por defecto de la primera celda, `reentrenar`).
 
 | | `aplicar` (cada mes) | `reentrenar` (cada trimestre o semestre) |
 |---|---|---|
 | Pronóstico (8) | Carga `modelos_ganadores_optimizados_final.joblib`, verifica el contrato y pronostica desde el último mes consolidado. No hace backtest. | Backtest + reentrenamiento con toda la historia + pronóstico. Sobreescribe el `.joblib`. Horas. |
 | Agrupamiento (9) | Carga `modelo_agrupamiento.joblib` y asigna cluster y nombre guardados. Los segmentos no cambian de nombre entre meses. | Comparación de algoritmos con Optuna y nuevos nombres. Sobreescribe el `.joblib`. |
 | Caída (10) | Usa `criterios_caida_por_segmento.joblib`: la misma regla que el mes anterior. Guarda la deriva en `deriva_criterios_caida.csv`. | Recalcula los umbrales y los guarda. |
+| Riesgo de fuga (14) | Carga `modelo_riesgo_fuga.joblib` y puntúa el corte nuevo; avisa si la población elegible cambió o el modelo lleva más de 6 meses. | Rearma el conjunto de entrenamiento con todos los cortes, evalúa en los últimos 6 cortes con ventana completa, entrena con todo y guarda el `.joblib`. Minutos, no horas: se puede reentrenar cada mes con `--solo 14,15`. |
 
-**Cuándo toca reentrenar.** Cualquiera de estas señales: el notebook 8 avisa que el modelo lleva más de 6 meses sin reentrenar; en `seguimiento_pronostico_por_perfil.csv` la columna `dif_vs_backtest_pp` es claramente positiva varios meses seguidos; el notebook 9 avisa que el perfil de un cluster ya no corresponde a su nombre; el notebook 10 avisa que algún segmento cambiaría de criterio o que los umbrales se movieron más de 10 puntos. Antes de reentrenar conviene correr también 6 y 7 si se quiere revisar la elección de algoritmos e hiperparámetros; si no, el 8 reutiliza los que están.
+**Cuándo toca reentrenar.** Cualquiera de estas señales: el notebook 8 avisa que el modelo lleva más de 6 meses sin reentrenar; en `seguimiento_pronostico_por_perfil.csv` la columna `dif_vs_backtest_pp` es claramente positiva varios meses seguidos; el notebook 9 avisa que el perfil de un cluster ya no corresponde a su nombre; el notebook 10 avisa que algún segmento cambiaría de criterio o que los umbrales se movieron más de 10 puntos; el notebook 14 avisa que la población elegible cambió (una clase nueva en el archivo de otros comercializadores) o que en `seguimiento_riesgo_fuga.csv` los señalados ALTO no se van más que la tasa base. Antes de reentrenar conviene correr también 6 y 7 si se quiere revisar la elección de algoritmos e hiperparámetros; si no, el 8 reutiliza los que están.
 
 ## 9. Retroalimentación de campo
 
@@ -338,10 +400,10 @@ pip install streamlit        # una sola vez
 streamlit run app_ebsa.py    # se abre en http://localhost:8501
 ```
 
-Secciones: Resumen (cifras del corte, trayectoria, estado en lista, valor por ciclo, severidad), Gestión por ciclo (lista operativa filtrable y descargable por ciclo), Ranking gerencial, Cortes (clase, estrato, zona, tramo), Buscar cliente (segmento, caída, posición en la lista y pronóstico a 6 meses de un NIU), Pronóstico 6 meses (totales proyectados y precisión por perfil), Seguimiento, Retroalimentación y Estado del pipeline (control de calidad y últimas corridas). La carpeta de datos se toma de `EBSA_DATOS` o se cambia en la barra lateral.
+Secciones: Resumen (cifras del corte, riesgo de fuga, trayectoria, estado en lista, valor por ciclo, severidad), Gestión por ciclo (lista operativa por ciclo con el nombre de la zona, filtrable por grupo de consumo y descargable), Ranking gerencial, **Riesgo de fuga** (lista filtrable por nivel, zona, grupo y clase; resumen por zona y grupo; los que ya están con otro comercializador y su perfil; vigilancia del mercado no regulado; calidad del modelo; seguimiento), Cortes (clase, estrato, zona, tramo), Buscar cliente (segmento, caída, posición en la lista, riesgo de fuga y pronóstico a 6 meses de un NIU; con buscador de ejemplos por grupo de consumo, segmento, trayectoria o ciclo), Pronóstico 6 meses (totales proyectados y precisión por grupo de consumo), **Descargas por grupo** (los archivos de `11_exportes_negocio\`), Seguimiento, Retroalimentación y Estado del pipeline. Todas las tablas muestran zona, clase de servicio, tipo de medidor y de lectura, promedio semestral y valor facturado con los nombres del glosario. La carpeta de datos se toma de `EBSA_DATOS` o se cambia en la barra lateral.
 
 ## 11. Entorno
 
 Python 3.10+ con las dependencias de `requirements.txt` (`pip install -r requirements.txt`). Los `.joblib` de LightGBM, XGBoost, CatBoost y scikit-learn dependen de la versión instalada: para dejar constancia de las versiones exactas de la máquina que entrenó los modelos, correr una vez `python generar_lock_entorno.py`, que escribe `requirements-lock.txt`; otra máquina reproduce el entorno con `pip install -r requirements-lock.txt`. Si un `.joblib` no carga por cambio de versión, la salida es una corrida en modo reentrenar.
 
-Los notebooks se abren desde `C:\Users\Home\Documents\GitHub\ProyectoEBSA\Pipeline_Ebsa` con `utilidades_borde.py` y `utilidades_calidad.py` en esa misma carpeta. La búsqueda de hiperparámetros del notebook 7 lleva semilla (`TPESampler(seed=...)`), igual que la del 9, así que una misma serie produce los mismos resultados.
+Los notebooks se abren desde `C:\Users\Home\Documents\GitHub\ProyectoEBSA\Pipeline_Ebsa` con `utilidades_borde.py`, `utilidades_calidad.py` y `utilidades_glosario.py` en esa misma carpeta. La búsqueda de hiperparámetros del notebook 7 lleva semilla (`TPESampler(seed=...)`), igual que la del 9, así que una misma serie produce los mismos resultados.

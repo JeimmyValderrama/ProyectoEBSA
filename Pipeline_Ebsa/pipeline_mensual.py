@@ -10,6 +10,9 @@ Uso (desde la carpeta del código, C:\\Users\\Home\\Documents\\GitHub\\ProyectoE
     python pipeline_mensual.py --solo 11,12                 # correr solo esos pasos
     python pipeline_mensual.py --lista                      # ver los pasos y salir
     python pipeline_mensual.py --modo aplicar --datos "D:\\otra\\ruta\\Datos_Ebsa"
+    python pipeline_mensual.py --modo aplicar --corte-max 2025-09 --solo 3,8,9,10,11,12,13,14,15
+                                                            # simulación: como si el archivo terminara en 2025-09
+    python pipeline_mensual.py --modo aplicar --version-modelo 2025-06   # aplicar con los modelos de esa versión
 
 Qué hace
 --------
@@ -44,9 +47,19 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import sys
 import time
 import traceback
+
+# Windows: si la salida va a un archivo o a otro proceso (simular_meses.py), Python usa
+# cp1252 y no puede escribir "✓" / "✗". Se fuerza UTF-8 en la salida de este script.
+import sys as _sys
+for _s in (_sys.stdout, _sys.stderr):
+    try:
+        _s.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:  # noqa: BLE001
+        pass
 from datetime import datetime
 from pathlib import Path
 
@@ -67,6 +80,8 @@ PASOS = [
     (11, "Priorizacion_gestion_caida.ipynb", "Listas de gestión por ciclo y gerencial, con historial", True, True),
     (12, "Seguimiento_pronostico_mensual.ipynb", "Pronósticos y listas anteriores contra lo que realmente pasó", True, True),
     (13, "Evaluacion_retroalimentacion_gestion.ipynb", "Resultados de las visitas en campo contra las listas (si hay datos)", True, True),
+    (14, "Riesgo_fuga_comercializador.ipynb", "Riesgo de fuga a otro comercializador (aplicar: modelo guardado | reentrenar: entrena y evalúa)", True, True),
+    (15, "Exportes_negocio.ipynb", "Archivos por grupo de consumo con nombres de negocio (pronóstico, caída y fuga) -> 11_exportes_negocio", True, True),
 ]
 
 
@@ -82,15 +97,54 @@ def ejecutar_notebook(ruta_nb: Path, ruta_salida: Path) -> None:
     from nbclient import NotebookClient
 
     nb = nbformat.read(ruta_nb, as_version=4)
+    celdas_codigo = [c for c in nb.cells if c.cell_type == "code"]
+    total = len(celdas_codigo)
+    inicio_nb = time.time()
+
+    def titulo_celda(celda) -> str:
+        """Segunda línea del encabezado de la celda ('# 8. CALCULAR PERFIL ...'), si la hay."""
+        lineas = [l.strip() for l in celda.source.splitlines() if l.strip()]
+        for l in lineas[:3]:
+            if l.startswith("#") and not l.startswith("# ===") and len(l) > 2:
+                return l.lstrip("# ").strip()[:70]
+        return (lineas[0][:70] if lineas else "")
+
+    def al_terminar_celda(cell=None, cell_index=None, **kwargs):
+        # Avance dentro del paso: una línea por celda, con el tiempo acumulado.
+        if cell is None or cell.cell_type != "code":
+            return
+        n = celdas_codigo.index(cell) + 1 if cell in celdas_codigo else cell_index
+        minutos = (time.time() - inicio_nb) / 60
+        print(f"       celda {n:>2}/{total}  {minutos:6.1f} min  {titulo_celda(cell)}", flush=True)
+
     cliente = NotebookClient(
         nb,
         timeout=None,                 # el backtest puede tardar horas
         kernel_name="python3",
         resources={"metadata": {"path": str(CODIGO_DIR)}},  # para que funcione `import utilidades_borde`
         allow_errors=False,
+        on_cell_executed=al_terminar_celda,
     )
     try:
         cliente.execute()
+    except Exception as e:  # noqa: BLE001
+        # Mostrar en consola lo que la celda alcanzó a imprimir antes de fallar:
+        # casi siempre ahí está la explicación (p. ej. la tabla del control de calidad).
+        for c in nb.cells:
+            if c.cell_type != "code":
+                continue
+            if any(o.get("output_type") == "error" for o in c.get("outputs", [])):
+                texto = "".join(
+                    "".join(o.get("text", "")) for o in c.get("outputs", [])
+                    if o.get("output_type") == "stream"
+                )
+                if texto.strip():
+                    print("\n     --- Salida de la celda que falló (últimas líneas) ---")
+                    for linea in texto.rstrip().splitlines()[-40:]:
+                        print("     " + linea)
+                    print("     " + "-" * 55)
+                break
+        raise e
     finally:
         # se guarda lo que alcanzó a ejecutarse, con error incluido, como registro
         ruta_salida.parent.mkdir(parents=True, exist_ok=True)
@@ -107,6 +161,10 @@ def main() -> int:
     parser.add_argument("--hasta", type=int, default=None, help="detenerse después de este paso")
     parser.add_argument("--solo", default=None, help="lista de pasos separados por coma, p. ej. 11,12")
     parser.add_argument("--lista", action="store_true", help="mostrar los pasos y salir")
+    parser.add_argument("--corte-max", default=None, metavar="AAAA-MM",
+                        help="simulación: usar solo datos hasta este mes (la serie se recorta en el paso 3)")
+    parser.add_argument("--version-modelo", default=None, metavar="AAAA-MM",
+                        help="aplicar con una versión guardada de los modelos (12_versiones_modelos) en vez de la vigente")
     args = parser.parse_args()
 
     if args.lista:
@@ -143,15 +201,31 @@ def main() -> int:
         for a in faltantes:
             print("  •", a)
         return 1
-    if not (CODIGO_DIR / "utilidades_borde.py").exists():
-        print("ERROR: utilidades_borde.py debe estar en", CODIGO_DIR)
-        return 1
+    for modulo in ("utilidades_borde.py", "utilidades_calidad.py", "utilidades_glosario.py", "utilidades_versiones.py"):
+        if not (CODIGO_DIR / modulo).exists():
+            print(f"ERROR: {modulo} debe estar en", CODIGO_DIR)
+            return 1
 
     os.environ["EBSA_MODO"] = args.modo
     os.environ["EBSA_DATOS"] = str(datos_dir)
+    for var in ("EBSA_CORTE_MAX", "EBSA_VERSION_MODELO"):
+        os.environ.pop(var, None)
+    sufijo = ""
+    if args.corte_max:
+        if not re.match(r"^\d{4}-\d{2}$", args.corte_max):
+            parser.error("--corte-max debe tener la forma AAAA-MM")
+        os.environ["EBSA_CORTE_MAX"] = args.corte_max
+        sufijo += f"_corte{args.corte_max}"
+    if args.version_modelo:
+        if args.modo != "aplicar":
+            parser.error("--version-modelo solo tiene sentido con --modo aplicar")
+        if not re.match(r"^\d{4}-\d{2}$", args.version_modelo):
+            parser.error("--version-modelo debe tener la forma AAAA-MM")
+        os.environ["EBSA_VERSION_MODELO"] = args.version_modelo
+        sufijo += f"_modelo{args.version_modelo}"
 
     marca = datetime.now().strftime("%Y-%m-%d_%H%M")
-    corrida_dir = datos_dir / "09_registro_corridas" / f"{marca}_{args.modo}"
+    corrida_dir = datos_dir / "09_registro_corridas" / f"{marca}_{args.modo}{sufijo}"
     corrida_dir.mkdir(parents=True, exist_ok=True)
     resumen = corrida_dir / "resumen_corrida.txt"
 
@@ -161,7 +235,9 @@ def main() -> int:
             f.write(linea + "\n")
 
     log("=" * 78)
-    log(f"CORRIDA EBSA  modo={args.modo}  datos={datos_dir}")
+    log(f"CORRIDA EBSA  modo={args.modo}  datos={datos_dir}"
+        + (f"  corte_max={args.corte_max}" if args.corte_max else "")
+        + (f"  version_modelo={args.version_modelo}" if args.version_modelo else ""))
     log(f"Código: {CODIGO_DIR}")
     log(f"Registro: {corrida_dir}")
     log(f"Pasos: {[n for n, _, _ in seleccion]}")
@@ -193,6 +269,8 @@ def main() -> int:
     log(f"  • {datos_dir / '07_gestion_caida'}")
     log(f"  • {datos_dir / '04_pronostico' / 'modelo_final'}")
     log(f"  • {datos_dir / '08_seguimiento'}")
+    log(f"  • {datos_dir / '10_riesgo_fuga'}")
+    log(f"  • {datos_dir / '11_exportes_negocio'}  (archivos por grupo de consumo para descargar)")
     log("=" * 78)
     return 0
 

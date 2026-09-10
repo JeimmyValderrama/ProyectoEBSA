@@ -14,6 +14,7 @@ Estructura:
 
     Datos_Ebsa\
     ├── 00_formato_TC2\               <- los XLSX/CSV mensuales de la empresa, formato TC2 (entrada del paso 1)
+    ├── 00_otros_comercializadores\   <- el XLSX de la empresa con los usuarios atendidos por otros comercializadores (paso 14)
     ├── 01_historico_procesado\       <- paso 1: historico_YYYY.parquet + detalle_mensual\
     ├── 02_serie_reconstruida\        <- paso 2: serie mensual con lecturas trimestrales repartidas
     │   └── copia_historicos\            (copia de trabajo de los historico_YYYY)
@@ -29,7 +30,10 @@ Estructura:
     │   ├── historial\
     │   └── retroalimentacion\
     ├── 08_seguimiento\               <- paso 12: precisión en vivo
-    └── 09_registro_corridas\         <- pipeline_mensual.py: registro de cada corrida
+    ├── 09_registro_corridas\         <- pipeline_mensual.py: registro de cada corrida
+    ├── 10_riesgo_fuga\               <- paso 14: RIESGO DE FUGA A OTRO COMERCIALIZADOR
+    │   └── historial\
+    └── 11_exportes_negocio\          <- paso 15: archivos por grupo de consumo para descargar
 
 El código vive aparte, en C:\\Users\\Home\\Documents\\GitHub\\ProyectoEBSA\\Pipeline_Ebsa.
 """
@@ -41,6 +45,7 @@ DATOS_DIR = Path(os.environ.get("EBSA_DATOS", r"C:\Users\Home\Documents\Datos_Eb
 
 CARPETAS = [
     "00_formato_TC2",
+    "00_otros_comercializadores",
     "01_historico_procesado/detalle_mensual",
     "02_serie_reconstruida/copia_historicos",
     "03_serie_modelado",
@@ -53,6 +58,8 @@ CARPETAS = [
     "07_gestion_caida/retroalimentacion",
     "08_seguimiento",
     "09_registro_corridas",
+    "10_riesgo_fuga/historial",
+    "11_exportes_negocio",
 ]
 
 print("Carpeta de datos:", DATOS_DIR)
@@ -70,6 +77,11 @@ Obligatorio (una de las dos opciones):
      (y el pipeline arranca desde el paso 1), o
   b) Procesado\\historico_2022.parquet ... historico_2026.parquet  ->  01_historico_procesado\\
      (y el pipeline arranca desde el paso 2: --desde 2). Más rápido.
+
+Para el riesgo de fuga (paso 14):
+  USUARIOS_OTROS_COMERCIALIZADORES.xlsx (archivo de la empresa, tal cual)  ->  00_otros_comercializadores\
+  Cada vez que la empresa entregue una versión nueva, se copia ahí (se pueden dejar varias; se
+  quitan las filas repetidas NIU-mes). Sin este archivo el paso corre igual, pero sin ejemplos reales.
 
 Obligatorio para el pronóstico (el notebook 8 los lee; son el resultado de los
 notebooks 6 y 7, que tardan horas):
