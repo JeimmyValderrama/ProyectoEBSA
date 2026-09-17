@@ -21,7 +21,7 @@ for _s in (_sys.stdout, _sys.stderr):
         pass
 import pyarrow.parquet as pq
 
-from utilidades_glosario import (
+from utilidades.utilidades_glosario import (
     ZONA_POR_CICLO, CLASE_SERVICIO_NOMBRE, TIPO_MEDIDOR_NOMBRE, TIPO_LECTURA_NOMBRE, TIPO_FACTURA_NOMBRE,
 )
 

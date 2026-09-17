@@ -39,7 +39,7 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
-from utilidades_glosario import (
+from utilidades.utilidades_glosario import (
     GRUPO_CONSUMO_NOMBRE, GRUPOS_CONSUMO_ORDEN, GRUPO_CONSUMO_DESCRIPCION, ZONA_POR_CICLO,
     enriquecer_glosario, grupo_desde_perfil, nombre_zona,
 )
