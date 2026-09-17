@@ -50,7 +50,7 @@ from utilidades_glosario import (
 st.set_page_config(page_title="EBSA — Consumo de clientes", page_icon="⚡", layout="wide")
 
 # Carpeta de datos: C:\Users\Home\Documents\Datos_Ebsa (o la variable de entorno EBSA_DATOS)
-DATOS_POR_DEFECTO = os.environ.get("EBSA_DATOS", r"C:\Users\Home\Documents\Datos_Ebsa")
+DATOS_POR_DEFECTO = os.environ.get("EBSA_DATOS", r"C:\Users\patri\Documents\Datos_Ebsa")
 
 # Colores: un solo tono para magnitudes; naranja solo cuando hay dos series.
 AZUL = "#2a78d6"

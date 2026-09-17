@@ -2,45 +2,73 @@
 pipeline_mensual.py — corre la cadena de notebooks del proyecto EBSA en orden
 ============================================================================
 
-Uso (desde la carpeta del código, C:\\Users\\Home\\Documents\\GitHub\\ProyectoEBSA\\Pipeline_Ebsa):
+Este archivo soporta la siguiente estructura:
 
-    python pipeline_mensual.py --modo aplicar        # corrida MENSUAL (llegó el archivo nuevo)
-    python pipeline_mensual.py --modo reentrenar     # corrida TRIMESTRAL / cuando toque reentrenar
-    python pipeline_mensual.py --modo aplicar --desde 9     # reanudar desde el paso 9
-    python pipeline_mensual.py --solo 11,12                 # correr solo esos pasos
-    python pipeline_mensual.py --lista                      # ver los pasos y salir
+    Pipeline_Ebsa/
+    ├── pipeline_mensual.py
+    ├── notebooks/
+    │   ├── 01_exploracion/
+    │   ├── 02_preparacion_datos/
+    │   ├── 03_desarrollo_prediccion/
+    │   ├── 04_produccion_prediccion/
+    │   ├── 05_segmentacion_clientes/
+    │   ├── 06_analisis_caidas/
+    │   ├── 07_riesgo_fuga/
+    │   ├── 08_seguimiento/
+    │   └── 09_exportes/
+    └── utilidades/
+        ├── utilidades_borde.py
+        ├── utilidades_calidad.py
+        ├── utilidades_glosario.py
+        └── utilidades_versiones.py
+
+Uso desde la carpeta Pipeline_Ebsa:
+
+    python pipeline_mensual.py --modo aplicar
+    python pipeline_mensual.py --modo reentrenar
+    python pipeline_mensual.py --modo aplicar --desde 9
+    python pipeline_mensual.py --solo 11,12
+    python pipeline_mensual.py --lista
     python pipeline_mensual.py --modo aplicar --datos "D:\\otra\\ruta\\Datos_Ebsa"
     python pipeline_mensual.py --modo aplicar --corte-max 2025-09 --solo 3,8,9,10,11,12,13,14,15
-                                                            # simulación: como si el archivo terminara en 2025-09
-    python pipeline_mensual.py --modo aplicar --version-modelo 2025-06   # aplicar con los modelos de esa versión
+    python pipeline_mensual.py --modo aplicar --version-modelo 2025-06
 
 Qué hace
 --------
-Ejecuta cada notebook de arriba abajo con un kernel limpio, en el orden de
-dependencia, con dos variables de entorno que los notebooks ya leen:
+Ejecuta los notebooks seleccionados con un kernel limpio y en el orden de
+sus dependencias. Las rutas de los notebooks son relativas a la carpeta
+"notebooks" y las utilidades se cargan desde la carpeta "utilidades".
 
-    EBSA_MODO  = aplicar | reentrenar
-    EBSA_DATOS = carpeta raíz de datos (por defecto C:\\Users\\Home\\Documents\\Datos_Ebsa)
+Variables de entorno disponibles para los notebooks:
 
-Cada notebook ejecutado (con sus salidas) queda guardado como registro de la
-corrida en  <datos>\\09_registro_corridas\\<fecha-hora>_<modo>\\NN_nombre.ipynb, junto con
-un resumen_corrida.txt. Los notebooks originales NO se modifican.
+    EBSA_MODO       = aplicar | reentrenar
+    EBSA_DATOS      = carpeta raíz de datos
+    EBSA_CODIGO     = carpeta raíz de Pipeline_Ebsa
+    EBSA_NOTEBOOKS  = carpeta de notebooks
+    EBSA_UTILIDADES = carpeta de utilidades
+    EBSA_CORTE_MAX  = AAAA-MM, si se utiliza --corte-max
+    EBSA_VERSION_MODELO = AAAA-MM, si se utiliza --version-modelo
 
-Si un paso falla, el pipeline se detiene ahí, muestra el error y sale con
-código 1. Se puede reanudar con --desde N una vez corregido.
+Cada notebook ejecutado queda guardado como registro en:
 
-Modo aplicar vs reentrenar
---------------------------
-    aplicar     : usa los modelos guardados (pronóstico, agrupamiento y criterios
-                  de caída) sin volver a entrenarlos. Tarda minutos.
-    reentrenar  : backtest + reentrenamiento del pronóstico, nueva comparación de
-                  algoritmos de agrupamiento y recálculo de criterios de caída.
-                  Tarda horas. Hacerlo cada trimestre/semestre o cuando el
-                  seguimiento mensual muestre que el error en vivo se degrada.
+    <datos>/09_registro_corridas/<fecha-hora>_<modo>/NN_nombre.ipynb
 
-Los notebooks de desarrollo (4, 5, 6 y 7: primeros modelos, comparación de
-algoritmos y Optuna) no forman parte de la corrida: se repiten solo si se
-quiere volver a elegir algoritmos o hiperparámetros.
+Los notebooks originales no se modifican. Si un paso falla, el pipeline se
+detiene y guarda el notebook parcial y el traceback.
+
+Modos
+-----
+aplicar:
+    Usa los modelos, segmentos y criterios guardados. Está pensado para la
+    corrida mensual y normalmente tarda minutos.
+
+reentrenar:
+    Reentrena o recalcula los componentes que correspondan. Está pensado para
+    una corrida trimestral/semestral o cuando el seguimiento indique deterioro.
+
+Los notebooks de desarrollo de modelos no se ejecutan en esta cadena operativa.
+Se ejecutan manualmente cuando se necesita volver a comparar algoritmos u
+optimizar hiperparámetros.
 """
 
 from __future__ import annotations
@@ -51,227 +79,505 @@ import re
 import sys
 import time
 import traceback
-
-# Windows: si la salida va a un archivo o a otro proceso (simular_meses.py), Python usa
-# cp1252 y no puede escribir "✓" / "✗". Se fuerza UTF-8 en la salida de este script.
-import sys as _sys
-for _s in (_sys.stdout, _sys.stderr):
-    try:
-        _s.reconfigure(encoding="utf-8", errors="replace")
-    except Exception:  # noqa: BLE001
-        pass
 from datetime import datetime
 from pathlib import Path
 
-# Código: la carpeta donde está este archivo (GitHub\ProyectoEBSA\Pipeline_Ebsa).
-# Datos: C:\Users\Home\Documents\Datos_Ebsa, salvo que se indique otra con
-# --datos o con la variable de entorno EBSA_DATOS.
-CODIGO_DIR = Path(__file__).resolve().parent
-DATOS_POR_DEFECTO = r"C:\Users\Home\Documents\Datos_Ebsa"
 
-# (número, archivo, descripción, corre en aplicar, corre en reentrenar)
+# Windows: fuerza UTF-8 en la salida de este script para soportar símbolos
+# como ✓, ⚠ y ✗ cuando la salida se redirige a un archivo o proceso.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:  # noqa: BLE001
+        pass
+
+
+# ---------------------------------------------------------------------------
+# Rutas del proyecto
+# ---------------------------------------------------------------------------
+
+# Carpeta donde está este archivo. No depende de la carpeta desde la que se
+# ejecute el comando.
+CODIGO_DIR = Path(__file__).resolve().parent
+
+# Subcarpetas del código.
+NOTEBOOKS_DIR = CODIGO_DIR / "notebooks"
+UTILIDADES_DIR = CODIGO_DIR / "utilidades"
+
+# Ruta por defecto de los datos. Puede cambiarse con --datos o EBSA_DATOS.
+DATOS_POR_DEFECTO = r"C:\Users\patri\Documents\Datos_Ebsa"
+
+
+# ---------------------------------------------------------------------------
+# Pasos operativos
+# ---------------------------------------------------------------------------
+#
+# Formato:
+# (número, ruta relativa dentro de notebooks, descripción,
+#  corre_en_aplicar, corre_en_reentrenar)
+#
+# El número representa el orden lógico del pipeline. La carpeta del notebook
+# puede tener otra numeración; no es obligatorio que ambas coincidan.
+
 PASOS = [
-    (1, "Exploracion_inicial.ipynb", "Leer los XLSX/CSV (formato TC2) de 00_formato_TC2 -> 01_historico_procesado/historico_YYYY.parquet", True, True),
-    (2, "Reconstruccion_serie_tiempo_consumo_rural.ipynb", "Control de calidad del mes entrante + serie mensual (lecturas trimestrales repartidas)", True, True),
-    (3, "Preprocesamiento_serie_tiempo_para_modelado.ipynb", "Excluir alumbrado público, marcar rurales, dejar la serie lista", True, True),
-    (8, "Backtest_y_reentrenamiento_final_optimizado.ipynb", "Pronóstico a 6 meses (aplicar: modelos guardados | reentrenar: backtest + entrenamiento)", True, True),
-    (9, "Agrupamiento_clientes_consumo.ipynb", "Segmentos de negocio (aplicar: modelo guardado | reentrenar: nueva comparación)", True, True),
-    (10, "Estudio_caida_consumo.ipynb", "Caída de consumo por cliente (aplicar: criterios guardados | reentrenar: recalcular)", True, True),
-    (11, "Priorizacion_gestion_caida.ipynb", "Listas de gestión por ciclo y gerencial, con historial", True, True),
-    (12, "Seguimiento_pronostico_mensual.ipynb", "Pronósticos y listas anteriores contra lo que realmente pasó", True, True),
-    (13, "Evaluacion_retroalimentacion_gestion.ipynb", "Resultados de las visitas en campo contra las listas (si hay datos)", True, True),
-    (14, "Riesgo_fuga_comercializador.ipynb", "Riesgo de fuga a otro comercializador (aplicar: modelo guardado | reentrenar: entrena y evalúa)", True, True),
-    (15, "Exportes_negocio.ipynb", "Archivos por grupo de consumo con nombres de negocio (pronóstico, caída y fuga) -> 11_exportes_negocio", True, True),
+    (
+        1,
+        Path("01_exploracion") / "Exploracion_inicial.ipynb",
+        "Leer los XLSX/CSV y crear el histórico procesado",
+        True,
+        True,
+    ),
+    (
+        2,
+        Path("02_preparacion_datos")
+        / "Reconstruccion_serie_tiempo_consumo_rural.ipynb",
+        "Control de calidad del mes entrante y reconstrucción mensual",
+        True,
+        True,
+    ),
+    (
+        3,
+        Path("02_preparacion_datos")
+        / "Preprocesamiento_serie_tiempo_para_modelado.ipynb",
+        "Excluir Alumbrado Público, marcar rurales y preparar la serie",
+        True,
+        True,
+    ),
+    (
+        8,
+        Path("04_produccion_prediccion")
+        / "Backtest_y_reentrenamiento_final_optimizado.ipynb",
+        "Pronóstico a seis meses: modelos guardados o reentrenamiento",
+        True,
+        True,
+    ),
+    (
+        9,
+        Path("05_segmentacion_clientes")
+        / "Agrupamiento_clientes_consumo.ipynb",
+        "Segmentos de negocio: modelo guardado o nueva comparación",
+        True,
+        True,
+    ),
+    (
+        10,
+        Path("06_analisis_caidas") / "Estudio_caida_consumo.ipynb",
+        "Calcular la caída de consumo por cliente",
+        True,
+        True,
+    ),
+    (
+        11,
+        Path("06_analisis_caidas") / "Priorizacion_gestion_caida.ipynb",
+        "Crear listas de gestión por ciclo y ranking gerencial",
+        True,
+        True,
+    ),
+    (
+        12,
+        Path("08_seguimiento") / "Seguimiento_pronostico_mensual.ipynb",
+        "Comparar pronósticos y listas anteriores contra la realidad",
+        True,
+        True,
+    ),
+    (
+        13,
+        Path("08_seguimiento")
+        / "Evaluacion_retroalimentacion_gestion.ipynb",
+        "Evaluar los resultados de las visitas de campo",
+        True,
+        True,
+    ),
+    (
+        14,
+        Path("07_riesgo_fuga") / "Riesgo_fuga_comercializador.ipynb",
+        "Calcular el riesgo de fuga a otro comercializador",
+        True,
+        True,
+    ),
+    (
+        15,
+        Path("09_exportes") / "Exportes_negocio.ipynb",
+        "Generar archivos por grupo de consumo para negocio",
+        True,
+        True,
+    ),
 ]
 
 
-def listar():
+# ---------------------------------------------------------------------------
+# Utilidades internas
+# ---------------------------------------------------------------------------
+
+
+def ruta_notebook(archivo: Path) -> Path:
+    """Devuelve la ruta absoluta de un notebook del proyecto."""
+    return NOTEBOOKS_DIR / archivo
+
+
+def preparar_entorno_notebooks() -> None:
+    """Expone las rutas del proyecto y las utilidades a los notebooks."""
+    os.environ["EBSA_CODIGO"] = str(CODIGO_DIR)
+    os.environ["EBSA_NOTEBOOKS"] = str(NOTEBOOKS_DIR)
+    os.environ["EBSA_UTILIDADES"] = str(UTILIDADES_DIR)
+
+    # NotebookClient inicia un kernel separado. Por eso la carpeta de
+    # utilidades debe viajar también en PYTHONPATH; modificar sys.path aquí
+    # solo afecta al proceso del pipeline, no necesariamente al kernel.
+    rutas_python = [str(UTILIDADES_DIR), str(CODIGO_DIR)]
+    pythonpath_actual = os.environ.get("PYTHONPATH", "")
+    rutas_existentes = [ruta for ruta in pythonpath_actual.split(os.pathsep) if ruta]
+    for ruta in rutas_python:
+        if ruta not in rutas_existentes:
+            rutas_existentes.insert(0, ruta)
+    os.environ["PYTHONPATH"] = os.pathsep.join(rutas_existentes)
+
+    # Permite que los notebooks importen utilidades aunque estén dentro de
+    # subcarpetas, por ejemplo:
+    # from utilidades_borde import ultimo_periodo_consolidado
+    for ruta in (CODIGO_DIR, UTILIDADES_DIR):
+        ruta_texto = str(ruta)
+        if ruta_texto not in sys.path:
+            sys.path.insert(0, ruta_texto)
+
+
+def listar() -> None:
+    """Muestra los pasos y comprueba si cada notebook existe."""
     print("Pasos de la corrida (en orden):")
-    for n, archivo, desc, _, _ in PASOS:
-        existe = "" if (CODIGO_DIR / archivo).exists() else "   <-- NO ENCONTRADO"
-        print(f"  {n:>2}. {archivo:<55} {desc}{existe}")
+    print(f"Carpeta de notebooks: {NOTEBOOKS_DIR}")
+    print(f"Carpeta de utilidades: {UTILIDADES_DIR}")
+    print()
+
+    for numero, archivo, descripcion, _, _ in PASOS:
+        ruta = ruta_notebook(archivo)
+        estado = "" if ruta.exists() else "   <-- NO ENCONTRADO"
+        print(f"  {numero:>2}. {str(archivo):<85} {descripcion}{estado}")
+
+
+def validar_utilidades() -> list[Path]:
+    """Devuelve las utilidades obligatorias que no existen."""
+    nombres = (
+        "utilidades_borde.py",
+        "utilidades_calidad.py",
+        "utilidades_glosario.py",
+        "utilidades_versiones.py",
+    )
+    return [UTILIDADES_DIR / nombre for nombre in nombres if not (UTILIDADES_DIR / nombre).exists()]
 
 
 def ejecutar_notebook(ruta_nb: Path, ruta_salida: Path) -> None:
+    """Ejecuta un notebook y guarda siempre una copia del resultado."""
     import nbformat
     from nbclient import NotebookClient
 
+    preparar_entorno_notebooks()
+
     nb = nbformat.read(ruta_nb, as_version=4)
-    celdas_codigo = [c for c in nb.cells if c.cell_type == "code"]
+    celdas_codigo = [celda for celda in nb.cells if celda.cell_type == "code"]
     total = len(celdas_codigo)
     inicio_nb = time.time()
 
     def titulo_celda(celda) -> str:
-        """Segunda línea del encabezado de la celda ('# 8. CALCULAR PERFIL ...'), si la hay."""
-        lineas = [l.strip() for l in celda.source.splitlines() if l.strip()]
-        for l in lineas[:3]:
-            if l.startswith("#") and not l.startswith("# ===") and len(l) > 2:
-                return l.lstrip("# ").strip()[:70]
-        return (lineas[0][:70] if lineas else "")
+        """Obtiene un título breve del encabezado de la celda."""
+        lineas = [
+            linea.strip()
+            for linea in celda.source.splitlines()
+            if linea.strip()
+        ]
+
+        for linea in lineas[:3]:
+            if linea.startswith("#") and not linea.startswith("# ===") and len(linea) > 2:
+                return linea.lstrip("# ").strip()[:70]
+
+        return lineas[0][:70] if lineas else ""
 
     def al_terminar_celda(cell=None, cell_index=None, **kwargs):
-        # Avance dentro del paso: una línea por celda, con el tiempo acumulado.
+        """Muestra el avance de ejecución celda por celda."""
         if cell is None or cell.cell_type != "code":
             return
-        n = celdas_codigo.index(cell) + 1 if cell in celdas_codigo else cell_index
+
+        try:
+            numero_celda = celdas_codigo.index(cell) + 1
+        except ValueError:
+            numero_celda = cell_index
+
         minutos = (time.time() - inicio_nb) / 60
-        print(f"       celda {n:>2}/{total}  {minutos:6.1f} min  {titulo_celda(cell)}", flush=True)
+        print(
+            f"       celda {numero_celda:>2}/{total}"
+            f"  {minutos:6.1f} min  {titulo_celda(cell)}",
+            flush=True,
+        )
 
     cliente = NotebookClient(
         nb,
-        timeout=None,                 # el backtest puede tardar horas
+        timeout=None,  # Algunos backtests pueden tardar horas.
         kernel_name="python3",
-        resources={"metadata": {"path": str(CODIGO_DIR)}},  # para que funcione `import utilidades_borde`
+        # Los notebooks pueden importar módulos desde la raíz del código y
+        # desde Pipeline_Ebsa/utilidades/.
+        resources={"metadata": {"path": str(CODIGO_DIR)}},
         allow_errors=False,
         on_cell_executed=al_terminar_celda,
     )
+
     try:
         cliente.execute()
-    except Exception as e:  # noqa: BLE001
-        # Mostrar en consola lo que la celda alcanzó a imprimir antes de fallar:
-        # casi siempre ahí está la explicación (p. ej. la tabla del control de calidad).
-        for c in nb.cells:
-            if c.cell_type != "code":
+    except Exception as error:  # noqa: BLE001
+        # Muestra la salida de la celda que falló antes de propagar el error.
+        for celda in nb.cells:
+            if celda.cell_type != "code":
                 continue
-            if any(o.get("output_type") == "error" for o in c.get("outputs", [])):
-                texto = "".join(
-                    "".join(o.get("text", "")) for o in c.get("outputs", [])
-                    if o.get("output_type") == "stream"
-                )
-                if texto.strip():
-                    print("\n     --- Salida de la celda que falló (últimas líneas) ---")
-                    for linea in texto.rstrip().splitlines()[-40:]:
-                        print("     " + linea)
-                    print("     " + "-" * 55)
-                break
-        raise e
+
+            salidas_error = [
+                salida
+                for salida in celda.get("outputs", [])
+                if salida.get("output_type") == "error"
+            ]
+
+            if not salidas_error:
+                continue
+
+            texto = "".join(
+                "".join(salida.get("text", ""))
+                for salida in celda.get("outputs", [])
+                if salida.get("output_type") == "stream"
+            )
+
+            if texto.strip():
+                print("\n     --- Salida de la celda que falló ---")
+                for linea in texto.rstrip().splitlines()[-40:]:
+                    print("     " + linea)
+                print("     " + "-" * 55)
+            break
+
+        raise error
     finally:
-        # se guarda lo que alcanzó a ejecutarse, con error incluido, como registro
+        # Se guarda lo ejecutado incluso si el notebook termina con error.
         ruta_salida.parent.mkdir(parents=True, exist_ok=True)
         nbformat.write(nb, ruta_salida)
 
 
+# ---------------------------------------------------------------------------
+# Programa principal
+# ---------------------------------------------------------------------------
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Corrida mensual del proyecto EBSA")
-    parser.add_argument("--modo", choices=["aplicar", "reentrenar"], default=None,
-                        help="aplicar = modelos guardados (mensual); reentrenar = entrenar de nuevo")
-    parser.add_argument("--datos", default=os.environ.get("EBSA_DATOS", DATOS_POR_DEFECTO),
-                        help="carpeta raíz de datos (EBSA_DATOS)")
-    parser.add_argument("--desde", type=int, default=None, help="reanudar desde este número de paso")
-    parser.add_argument("--hasta", type=int, default=None, help="detenerse después de este paso")
-    parser.add_argument("--solo", default=None, help="lista de pasos separados por coma, p. ej. 11,12")
-    parser.add_argument("--lista", action="store_true", help="mostrar los pasos y salir")
-    parser.add_argument("--corte-max", default=None, metavar="AAAA-MM",
-                        help="simulación: usar solo datos hasta este mes (la serie se recorta en el paso 3)")
-    parser.add_argument("--version-modelo", default=None, metavar="AAAA-MM",
-                        help="aplicar con una versión guardada de los modelos (12_versiones_modelos) en vez de la vigente")
+
+    parser.add_argument(
+        "--modo",
+        choices=["aplicar", "reentrenar"],
+        default=None,
+        help="aplicar = modelos guardados; reentrenar = entrenar de nuevo",
+    )
+    parser.add_argument(
+        "--datos",
+        default=os.environ.get("EBSA_DATOS", DATOS_POR_DEFECTO),
+        help="carpeta raíz de datos; también puede definirse con EBSA_DATOS",
+    )
+    parser.add_argument(
+        "--desde",
+        type=int,
+        default=None,
+        help="reanudar desde este número de paso",
+    )
+    parser.add_argument(
+        "--hasta",
+        type=int,
+        default=None,
+        help="detenerse después de este número de paso",
+    )
+    parser.add_argument(
+        "--solo",
+        default=None,
+        help="lista de pasos separados por coma, por ejemplo 11,12",
+    )
+    parser.add_argument(
+        "--lista",
+        action="store_true",
+        help="mostrar los pasos y salir",
+    )
+    parser.add_argument(
+        "--corte-max",
+        default=None,
+        metavar="AAAA-MM",
+        help="simulación: usar los datos solo hasta este mes",
+    )
+    parser.add_argument(
+        "--version-modelo",
+        default=None,
+        metavar="AAAA-MM",
+        help="aplicar una versión guardada de los modelos",
+    )
+
     args = parser.parse_args()
+
+    preparar_entorno_notebooks()
 
     if args.lista:
         listar()
         return 0
 
     if args.modo is None:
-        parser.error("indica --modo aplicar (mensual) o --modo reentrenar")
+        parser.error("indica --modo aplicar o --modo reentrenar")
 
-    datos_dir = Path(args.datos)
+    datos_dir = Path(args.datos).expanduser().resolve()
     if not datos_dir.exists():
         print(f"ERROR: no existe la carpeta de datos: {datos_dir}")
         return 1
 
-    # Selección de pasos
-    seleccion = []
-    solo = {int(x) for x in args.solo.split(",")} if args.solo else None
-    for n, archivo, desc, en_aplicar, en_reentrenar in PASOS:
-        if solo is not None and n not in solo:
-            continue
-        if args.desde is not None and n < args.desde:
-            continue
-        if args.hasta is not None and n > args.hasta:
-            continue
-        if args.modo == "aplicar" and not en_aplicar:
-            continue
-        if args.modo == "reentrenar" and not en_reentrenar:
-            continue
-        seleccion.append((n, archivo, desc))
+    # Validación de formatos de parámetros.
+    if args.corte_max and not re.match(r"^\d{4}-\d{2}$", args.corte_max):
+        parser.error("--corte-max debe tener la forma AAAA-MM")
 
-    faltantes = [a for _, a, _ in seleccion if not (CODIGO_DIR / a).exists()]
-    if faltantes:
-        print("ERROR: faltan notebooks en", CODIGO_DIR)
-        for a in faltantes:
-            print("  •", a)
-        return 1
-    for modulo in ("utilidades_borde.py", "utilidades_calidad.py", "utilidades_glosario.py", "utilidades_versiones.py"):
-        if not (CODIGO_DIR / modulo).exists():
-            print(f"ERROR: {modulo} debe estar en", CODIGO_DIR)
-            return 1
-
-    os.environ["EBSA_MODO"] = args.modo
-    os.environ["EBSA_DATOS"] = str(datos_dir)
-    for var in ("EBSA_CORTE_MAX", "EBSA_VERSION_MODELO"):
-        os.environ.pop(var, None)
-    sufijo = ""
-    if args.corte_max:
-        if not re.match(r"^\d{4}-\d{2}$", args.corte_max):
-            parser.error("--corte-max debe tener la forma AAAA-MM")
-        os.environ["EBSA_CORTE_MAX"] = args.corte_max
-        sufijo += f"_corte{args.corte_max}"
     if args.version_modelo:
         if args.modo != "aplicar":
             parser.error("--version-modelo solo tiene sentido con --modo aplicar")
         if not re.match(r"^\d{4}-\d{2}$", args.version_modelo):
             parser.error("--version-modelo debe tener la forma AAAA-MM")
+
+    # Selección de pasos.
+    try:
+        solo = {int(x.strip()) for x in args.solo.split(",")} if args.solo else None
+    except ValueError:
+        parser.error("--solo debe contener números separados por coma, por ejemplo 11,12")
+
+    seleccion = []
+    for numero, archivo, descripcion, en_aplicar, en_reentrenar in PASOS:
+        if solo is not None and numero not in solo:
+            continue
+        if args.desde is not None and numero < args.desde:
+            continue
+        if args.hasta is not None and numero > args.hasta:
+            continue
+        if args.modo == "aplicar" and not en_aplicar:
+            continue
+        if args.modo == "reentrenar" and not en_reentrenar:
+            continue
+
+        seleccion.append((numero, archivo, descripcion))
+
+    # Validar notebooks seleccionados.
+    faltantes = [
+        archivo
+        for _, archivo, _ in seleccion
+        if not ruta_notebook(archivo).exists()
+    ]
+
+    if faltantes:
+        print(f"ERROR: faltan notebooks en {NOTEBOOKS_DIR}")
+        for archivo in faltantes:
+            print(f"  • {archivo}")
+        return 1
+
+    # Validar utilidades compartidas.
+    utilidades_faltantes = validar_utilidades()
+    if utilidades_faltantes:
+        print(f"ERROR: faltan utilidades en {UTILIDADES_DIR}")
+        for ruta in utilidades_faltantes:
+            print(f"  • {ruta.name}")
+        return 1
+
+    # Variables de entorno disponibles para todos los notebooks.
+    os.environ["EBSA_MODO"] = args.modo
+    os.environ["EBSA_DATOS"] = str(datos_dir)
+    os.environ["EBSA_CODIGO"] = str(CODIGO_DIR)
+    os.environ["EBSA_NOTEBOOKS"] = str(NOTEBOOKS_DIR)
+    os.environ["EBSA_UTILIDADES"] = str(UTILIDADES_DIR)
+
+    # Limpiar variables opcionales de ejecuciones anteriores.
+    os.environ.pop("EBSA_CORTE_MAX", None)
+    os.environ.pop("EBSA_VERSION_MODELO", None)
+
+    sufijo = ""
+
+    if args.corte_max:
+        os.environ["EBSA_CORTE_MAX"] = args.corte_max
+        sufijo += f"_corte{args.corte_max}"
+
+    if args.version_modelo:
         os.environ["EBSA_VERSION_MODELO"] = args.version_modelo
         sufijo += f"_modelo{args.version_modelo}"
 
+    # Carpeta de registro de la corrida.
     marca = datetime.now().strftime("%Y-%m-%d_%H%M")
     corrida_dir = datos_dir / "09_registro_corridas" / f"{marca}_{args.modo}{sufijo}"
     corrida_dir.mkdir(parents=True, exist_ok=True)
     resumen = corrida_dir / "resumen_corrida.txt"
 
-    def log(linea: str):
+    def log(linea: str) -> None:
         print(linea, flush=True)
-        with open(resumen, "a", encoding="utf-8") as f:
-            f.write(linea + "\n")
+        with open(resumen, "a", encoding="utf-8") as archivo_resumen:
+            archivo_resumen.write(linea + "\n")
 
     log("=" * 78)
-    log(f"CORRIDA EBSA  modo={args.modo}  datos={datos_dir}"
+    log(
+        f"CORRIDA EBSA  modo={args.modo}  datos={datos_dir}"
         + (f"  corte_max={args.corte_max}" if args.corte_max else "")
-        + (f"  version_modelo={args.version_modelo}" if args.version_modelo else ""))
+        + (
+            f"  version_modelo={args.version_modelo}"
+            if args.version_modelo
+            else ""
+        )
+    )
     log(f"Código: {CODIGO_DIR}")
+    log(f"Notebooks: {NOTEBOOKS_DIR}")
+    log(f"Utilidades: {UTILIDADES_DIR}")
     log(f"Registro: {corrida_dir}")
-    log(f"Pasos: {[n for n, _, _ in seleccion]}")
+    log(f"Pasos: {[numero for numero, _, _ in seleccion]}")
     log("=" * 78)
 
     inicio_total = time.time()
-    for n, archivo, desc in seleccion:
-        log(f"\n[{n:>2}] {archivo}")
-        log(f"     {desc}")
+
+    for numero, archivo, descripcion in seleccion:
+        log(f"\n[{numero:>2}] {archivo}")
+        log(f"     {descripcion}")
         inicio = time.time()
-        salida = corrida_dir / f"{n:02d}_{archivo}"
+
+        # El registro se guarda plano. Así no se crean subcarpetas dentro de
+        # la carpeta de cada corrida por causa de la ruta original del notebook.
+        nombre_salida = Path(archivo).name
+        salida = corrida_dir / f"{numero:02d}_{nombre_salida}"
+        origen = ruta_notebook(archivo)
+
         try:
-            ejecutar_notebook(CODIGO_DIR / archivo, salida)
-        except Exception as e:  # noqa: BLE001
+            ejecutar_notebook(origen, salida)
+        except Exception as error:  # noqa: BLE001
             minutos = (time.time() - inicio) / 60
             log(f"     ✗ FALLÓ a los {minutos:.1f} min")
-            log("     " + type(e).__name__ + ": " + str(e).strip().splitlines()[-1][:300])
+            log(
+                "     "
+                + type(error).__name__
+                + ": "
+                + str(error).strip().splitlines()[-1][:300]
+            )
             log(f"     El notebook con el error quedó en: {salida}")
-            log(f"     Corrige y reanuda con:  python pipeline_mensual.py --modo {args.modo} --desde {n}")
-            with open(corrida_dir / "traceback.txt", "w", encoding="utf-8") as f:
-                f.write(traceback.format_exc())
+            log(
+                "     Corrige y reanuda con: "
+                f"python pipeline_mensual.py --modo {args.modo} --desde {numero}"
+            )
+
+            with open(corrida_dir / "traceback.txt", "w", encoding="utf-8") as archivo_traceback:
+                archivo_traceback.write(traceback.format_exc())
+
             return 1
+
         minutos = (time.time() - inicio) / 60
         log(f"     ✓ terminado en {minutos:.1f} min -> {salida.name}")
 
     log("\n" + "=" * 78)
     log(f"CORRIDA COMPLETA en {(time.time() - inicio_total) / 60:.1f} min")
-    log("Salidas para la página: ")
+    log("Salidas principales para la página:")
     log(f"  • {datos_dir / '07_gestion_caida'}")
     log(f"  • {datos_dir / '04_pronostico' / 'modelo_final'}")
     log(f"  • {datos_dir / '08_seguimiento'}")
     log(f"  • {datos_dir / '10_riesgo_fuga'}")
-    log(f"  • {datos_dir / '11_exportes_negocio'}  (archivos por grupo de consumo para descargar)")
+    log(
+        f"  • {datos_dir / '11_exportes_negocio'}"
+        "  (archivos por grupo de consumo para descargar)"
+    )
     log("=" * 78)
+
     return 0
 
 

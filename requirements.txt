@@ -1,4 +1,4 @@
-# Proyecto EBSA — dependencias
+﻿# Proyecto EBSA — dependencias
 #
 # Este archivo fija las versiones MÍNIMAS con las que se construyó el proyecto.
 # Para dejar constancia de las versiones EXACTAS instaladas en la máquina que

@@ -41,7 +41,7 @@ El código vive aparte, en C:\\Users\\Home\\Documents\\GitHub\\ProyectoEBSA\\Pip
 import os
 from pathlib import Path
 
-DATOS_DIR = Path(os.environ.get("EBSA_DATOS", r"C:\Users\Home\Documents\Datos_Ebsa"))
+DATOS_DIR = Path(os.environ.get("EBSA_DATOS", r"C:\Users\patri\Documents\Datos_Ebsa"))
 
 CARPETAS = [
     "00_formato_TC2",
