@@ -1,12 +1,44 @@
 # Comandos del proyecto EBSA — qué hace cada uno y cuándo usarlo
 
-Todos se corren en una terminal abierta en la carpeta del código:
+Todos se corren desde una terminal abierta en la raíz de `Pipeline_Ebsa`. El pipeline está en la raíz; los scripts auxiliares están en `scripts\` y la aplicación en `web\`:
 
 ```
 cd C:\Users\Home\Documents\GitHub\ProyectoEBSA\Pipeline_Ebsa
 ```
 
+
+
+Estructura mínima del código:
+
+```text
+Pipeline_Ebsa\\
+├── pipeline_mensual.py
+├── notebooks\\
+├── scripts\\
+├── utilidades\\
+└── web\\app_ebsa.py
+```
+
+No se debe ejecutar el pipeline desde `scripts\\`; siempre se ejecuta desde `Pipeline_Ebsa\\`:
+
+```bash
+cd C:\Users\Home\Documents\GitHub\ProyectoEBSA\Pipeline_Ebsa
+python pipeline_mensual.py --modo aplicar
+```
+
 Los datos siempre se leen y escriben en `C:\Users\Home\Documents\Datos_Ebsa` (o en la carpeta que diga la variable de entorno `EBSA_DATOS`). Ningún comando modifica los archivos de la empresa (`00_formato_TC2`, `00_otros_comercializadores`).
+
+
+
+### Verificación inicial de rutas
+
+Antes de ejecutar una corrida real, comprobar que el pipeline encuentre los notebooks:
+
+```bash
+python pipeline_mensual.py --lista
+```
+
+Si aparece `NO ENCONTRADO`, revisar que los notebooks estén dentro de `notebooks\\` y que las utilidades estén dentro de `utilidades\\`. El pipeline configura `PYTHONPATH` automáticamente para que los notebooks puedan importar las utilidades compartidas.
 
 ---
 
@@ -16,8 +48,8 @@ Los datos siempre se leen y escriben en `C:\Users\Home\Documents\Datos_Ebsa` (o 
 |---|---|---|
 | Copiar el archivo | (a mano) `formato_tc2_AAAAMM.xlsx` → `Datos_Ebsa\00_formato_TC2\`. Si hay versión nueva del archivo de otros comercializadores → `Datos_Ebsa\00_otros_comercializadores\`. | El año y el mes salen del nombre del archivo. No borrar los meses anteriores de la carpeta: los ya procesados no se vuelven a leer. |
 | Correr la cadena | `python pipeline_mensual.py --modo aplicar` | Ejecuta 1 → 2 → 3 → 8 → 9 → 10 → 11 → 12 → 13 → 14 → 15 con los modelos guardados (no entrena). Agrega el mes al histórico, reconstruye la serie, calcula los cortes por zona, pronostica, agrupa, mide caída, arma las listas, hace el seguimiento, puntúa el riesgo de fuga y deja los exportes por grupo. Tarda unos 20–25 minutos (leer un archivo TC2 nuevo ~5 min, reconstruir la serie ~5–10 min, el resto ~8 min). |
-| Verificar | `python verificar_corrida.py` | Un minuto. Revisa que todo quedó consistente y lo resume en ✓ / ⚠ / ✗. Si hay ✗, no usar las listas de esa corrida. |
-| Ver resultados | `streamlit run app_ebsa.py` | Abre la página en el navegador (http://localhost:8501). Se cierra con Ctrl+C en la terminal. |
+| Verificar | `python scripts\verificar_corrida.py` | Un minuto. Revisa que todo quedó consistente y lo resume en ✓ / ⚠ / ✗. Si hay ✗, no usar las listas de esa corrida. |
+| Ver resultados | `streamlit run web\app_ebsa.py` | Abre la página en el navegador (http://localhost:8501). Se cierra con Ctrl+C en la terminal. |
 
 Si un paso falla, el pipeline se detiene, dice por qué y con qué comando reanudar (`--desde N`). Los dos fallos "buenos" son la compuerta de calidad del paso 2 (el archivo llegó con menos clientes urbanos, tarifas en cero, un ciclo desconocido) y el detector del borde del paso 3 (quiere retroceder demasiados meses): en ambos casos hay que mirar el archivo, no forzar la corrida.
 
@@ -64,12 +96,12 @@ Pasos disponibles: 1 Exploración (histórico), 2 Reconstrucción rural, 3 Prepr
 
 | Comando | Qué muestra | Cuándo |
 |---|---|---|
-| `python verificar_corrida.py` | Consistencia de la última corrida (histórico, cortes, pronóstico, listas, fuga, exportes, registro). | Después de cada corrida. |
-| `python estado_modelos.py` | Un veredicto por modelo (pronóstico, agrupamiento, caída, riesgo de fuga): MANTENER / REVISAR / REENTRENAR, con el motivo y el comando exacto si toca reentrenar. Lee la antigüedad de cada modelo, el seguimiento en vivo y la deriva de criterios. | Después de la corrida mensual, para decidir si el mes que viene se corre en modo reentrenar. |
-| `python comparar_modelos.py` | Deterioro y mejora de los modelos: WAPE en vivo por versión, curva de envejecimiento y cabeza a cabeza viejo vs nuevo (sección 4b). | Después de una simulación, o cada trimestre con los meses reales acumulados. |
-| `python diagnostico_glosario.py` | Códigos del histórico (ciclo, clase, medidor, lectura, factura, estrato) que no tienen nombre en el glosario, cuántos clientes los tienen, y meses que llegaron sin esas columnas. | Cuando la empresa entregue glosario nuevo, o si la página muestra "sin nombre en glosario" con códigos que no conocías. |
-| `python diagnostico_cruce_fuga.py` | Cruce del archivo de otros comercializadores contra la historia TC2: cuántos existen, cuándo salieron, cómo se ve la salida. | Cuando llegue una versión nueva del archivo de otros comercializadores, para ver cuántos ejemplos nuevos aporta. |
-| `python diagnostico_fuga.py` | Cómo se ven en TC2 los ciclos 97 y 33, la clase IR y los clientes que dejan de aparecer. | Rara vez; sirvió para diseñar el producto de fuga. |
+| `python scripts\verificar_corrida.py` | Consistencia de la última corrida (histórico, cortes, pronóstico, listas, fuga, exportes, registro). | Después de cada corrida. |
+| `python scripts\estado_modelos.py` | Un veredicto por modelo (pronóstico, agrupamiento, caída, riesgo de fuga): MANTENER / REVISAR / REENTRENAR, con el motivo y el comando exacto si toca reentrenar. Lee la antigüedad de cada modelo, el seguimiento en vivo y la deriva de criterios. | Después de la corrida mensual, para decidir si el mes que viene se corre en modo reentrenar. |
+| `python scripts\comparar_modelos.py` | Deterioro y mejora de los modelos: WAPE en vivo por versión, curva de envejecimiento y cabeza a cabeza viejo vs nuevo (sección 4b). | Después de una simulación, o cada trimestre con los meses reales acumulados. |
+| `python scripts\diagnostico_glosario.py` | Códigos del histórico (ciclo, clase, medidor, lectura, factura, estrato) que no tienen nombre en el glosario, cuántos clientes los tienen, y meses que llegaron sin esas columnas. | Cuando la empresa entregue glosario nuevo, o si la página muestra "sin nombre en glosario" con códigos que no conocías. |
+| `python scripts\diagnostico_cruce_fuga.py` | Cruce del archivo de otros comercializadores contra la historia TC2: cuántos existen, cuándo salieron, cómo se ve la salida. | Cuando llegue una versión nueva del archivo de otros comercializadores, para ver cuántos ejemplos nuevos aporta. |
+| `python scripts\diagnostico_fuga.py` | Cómo se ven en TC2 los ciclos 97 y 33, la clase IR y los clientes que dejan de aparecer. | Rara vez; sirvió para diseñar el producto de fuga. |
 
 ---
 
@@ -91,13 +123,13 @@ robocopy C:\Users\Home\Documents\Datos_Ebsa C:\Users\Home\Documents\Datos_Ebsa_s
 
 **Paso 3 — simular mes a mes sobre la copia** (una sola línea; puede correr de noche):
 ```
-python simular_meses.py --desde 2025-06 --hasta 2026-06 --reentrenar-en 2025-06,2026-02 --comparar-version 2025-06 --datos "C:\Users\Home\Documents\Datos_Ebsa_simulacion"
+python scripts\simular_meses.py --desde 2025-06 --hasta 2026-06 --reentrenar-en 2025-06,2026-02 --comparar-version 2025-06 --datos "C:\Users\Home\Documents\Datos_Ebsa_simulacion"
 ```
 Qué hace: en 2025-06 entrena todo como si fuera ese mes (no ve nada posterior); de 2025-07 a 2026-01 aplica ese modelo mes a mes; en 2026-02 reentrena; de 2026-03 a 2026-06 aplica el nuevo. En cada corte guarda el pronóstico, las listas, el seguimiento, `verificar_corrida.py` y `estado_modelos.py`. Al final vuelve a pronosticar 2026-02 a 2026-06 con la versión vieja (2025-06) y guarda esos pronósticos aparte, para enfrentarlos con los del modelo nuevo sobre los mismos meses. Tiempo: cada corte en aplicar ~8 min (medido: 7,8 min para los pasos 3–15 sobre la carpeta real), cada reentrenamiento ~1,5–2 h (el primero de la simulación lo mide: columna `minutos` de `resumen_simulacion.csv`); 13 cortes con 2 reentrenamientos ≈ 5–6 horas, más ~25 min de la comparación final. Se puede dejar de noche. Para acortar, `--cada 2` (un corte sí y otro no) o un rango más corto. Si se interrumpe, se retoma con `--desde <el corte que falló>` y `--reentrenar-en` solo con los cortes de reentrenamiento que falten (los modelos ya entrenados quedaron en la copia).
 
 **Paso 4 — leer el resultado:**
 ```
-python comparar_modelos.py --datos "C:\Users\Home\Documents\Datos_Ebsa_simulacion"
+python scripts\comparar_modelos.py --datos "C:\Users\Home\Documents\Datos_Ebsa_simulacion"
 ```
 Tres vistas: (1) el WAPE en vivo corte a corte con la versión del modelo que pronosticó; (2) la curva de envejecimiento (WAPE según meses desde el entrenamiento: dice cada cuánto conviene reentrenar); (3) cabeza a cabeza sobre los mismos meses, modelo viejo contra nuevo, con la mejora en puntos. Deja `comparacion_modelos.png` y dos CSV en `09_registro_corridas\simulacion\`, y `resumen_simulacion.csv` con una fila por corte (clientes en lista, ALTO/MEDIO de fuga, veredicto del estado del modelo).
 
@@ -110,8 +142,8 @@ Tres vistas: (1) el WAPE en vivo corte a corte con la versión del modelo que pr
 | Comando | Para qué |
 |---|---|
 | `pip install -r requirements.txt` | Instalar las librerías (pandas, LightGBM, XGBoost, CatBoost, Optuna, Streamlit, etc.). |
-| `python preparar_carpeta_datos.py` | Crear la estructura de carpetas de `Datos_Ebsa` y ver qué hay que copiar del proyecto anterior. |
-| `python generar_lock_entorno.py` | Escribir `requirements-lock.txt` con las versiones exactas instaladas, para reproducir el entorno en otra máquina (`pip install -r requirements-lock.txt`). Los `.joblib` dependen de la versión. |
+| `python scripts\preparar_carpeta_datos.py` | Crear la estructura de carpetas de `Datos_Ebsa` y ver qué hay que copiar del proyecto anterior. |
+| `python scripts\generar_lock_entorno.py` | Escribir `requirements-lock.txt` con las versiones exactas instaladas, para reproducir el entorno en otra máquina (`pip install -r requirements-lock.txt`). Los `.joblib` dependen de la versión. |
 
 ---
 
