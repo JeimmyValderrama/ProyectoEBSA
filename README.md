@@ -31,7 +31,7 @@ Dos carpetas, separadas a propósito: el **código** en GitHub y los **datos** e
 
 | Qué | Ruta | Dónde se define |
 |---|---|---|
-| **Código** (15 notebooks, `utilidades/utilidades_borde.py`, `utilidades/utilidades_calidad.py`, `utilidades/utilidades_glosario.py`, `pipeline_mensual.py`, `web/app_ebsa.py`, `scripts/preparar_carpeta_datos.py`) | `C:\Users\Home\Documents\GitHub\ProyectoEBSA\Pipeline_Ebsa` | Es donde se abren los notebooks y desde donde se corren los scripts. Las utilidades están en `Pipeline_Ebsa\utilidades\`; el pipeline las agrega a `PYTHONPATH` antes de ejecutar los notebooks. |
+| **Código** (15 notebooks del pipeline; `EDA_historico_EBSA.ipynb` es un análisis independiente, además de `utilidades/utilidades_borde.py`, `utilidades/utilidades_calidad.py`, `utilidades/utilidades_glosario.py`, `pipeline_mensual.py`, `web/app_ebsa.py` y `scripts/preparar_carpeta_datos.py`) | `C:\Users\Home\Documents\GitHub\ProyectoEBSA\Pipeline_Ebsa` | Es donde se abren los notebooks y desde donde se corren los scripts. Las utilidades están en `Pipeline_Ebsa\utilidades\`; el pipeline agrega las utilidades a `PYTHONPATH` antes de ejecutar sus 15 pasos. |
 | **Datos** (archivos de la empresa, intermedios, modelos, salidas) | `C:\Users\Home\Documents\Datos_Ebsa` | Variable `BASE_DIR` (o `DATA_DIR` en Exploración) en la primera celda de cada notebook, y `BASE` en los scripts.  |
 
 
@@ -47,6 +47,8 @@ Pipeline_Ebsa\\
 │
 ├── notebooks\\
 │   ├── 01_exploracion\\
+│   │   ├── Exploracion_inicial.ipynb\\
+│   │   └── EDA_historico_EBSA.ipynb\\
 │   ├── 02_preparacion_datos\\
 │   ├── 03_desarrollo_prediccion\\    ← notebooks 4, 5, 6 y 7
 │   ├── 04_produccion_prediccion\\    ← notebook 8
@@ -63,6 +65,44 @@ Pipeline_Ebsa\\
 ```
 
 El pipeline actualizado busca los notebooks dentro de `notebooks\\` y las utilidades dentro de `utilidades\\`. Por ese motivo, no se deben volver a colocar los notebooks o las utilidades directamente junto a `pipeline_mensual.py` sin actualizar la lista `PASOS`.
+
+### Notebook EDA: `notebooks\01_exploracion\EDA_historico_EBSA.ipynb`
+
+Este notebook se incorporó a la carpeta de exploración como una herramienta de **análisis exploratorio de datos**. No reemplaza a `Exploracion_inicial.ipynb` ni cambia las reglas del pipeline automáticamente.
+
+Su función es estudiar los históricos ya procesados antes de tomar decisiones de preparación y modelado. Entre otras cosas, revisa:
+
+- estructura, tipos y cardinalidad de las variables;
+- cantidad y porcentaje de valores nulos;
+- cobertura mensual en todos los históricos;
+- distribución del consumo, ceros y valores extremos;
+- días facturados y lecturas aproximadamente trimestrales;
+- comportamiento por clase de servicio, ciclo, tipo de lectura y tipo de medidor;
+- duplicados por `NIU` y `periodo`;
+- estacionalidad mensual y continuidad de cada cliente;
+- correlaciones entre variables numéricas;
+- decisiones sugeridas para la reconstrucción y el preprocesamiento.
+
+#### Ubicación y función dentro del flujo
+
+```text
+00_formato_TC2
+        ↓
+Exploracion_inicial.ipynb
+        ↓
+01_historico_procesado
+        ↓
+EDA_historico_EBSA.ipynb  ← diagnóstico y evidencia; ejecución opcional
+        ↓
+02_reconstruccion → 03_preprocesamiento → modelos
+```
+
+El EDA debe ejecutarse cuando se quiera revisar la estructura de los datos, documentar hallazgos o justificar cambios en el tratamiento. Lee los históricos y muestra tablas/gráficas dentro del notebook; no debe modificar los archivos originales ni generar una nueva versión del dataset final por sí solo.
+
+Si el notebook EDA se abre manualmente, se debe revisar que `DATA_DIR` apunte a la carpeta correcta de `Datos_Ebsa` y que existan los históricos en `01_historico_procesado`. Sus resultados son diagnósticos: las reglas productivas continúan implementadas en los notebooks 1, 2 y 3 y deben validarse sobre los datos completos.
+
+**Importante:** el pipeline mensual tiene únicamente 15 pasos numerados. `EDA_historico_EBSA.ipynb` es un análisis independiente: no pertenece al pipeline, no se ejecuta con `pipeline_mensual.py`, no tiene un número de paso y no debe agregarse a la lista `PASOS`. La cadena mensual permanece `1 → 2 → 3 → 8 → ... → 15`.
+
 
 Los scripts que ahora están dentro de `scripts\\` deben ejecutarse desde la raíz de `Pipeline_Ebsa` usando su ruta relativa, por ejemplo:
 
@@ -166,7 +206,7 @@ Datos_Ebsa/
         para ser descargados y utilizados por el negocio.
         
 C:\Users\Home\Documents\GitHub\ProyectoEBSA\
-└── Pipeline_Ebsa\                 ← EL CÓDIGO: 15 notebooks, utilidades_*.py, pipeline_mensual.py, app_ebsa.py
+└── Pipeline_Ebsa\                 ← EL CÓDIGO: 15 notebooks del pipeline + EDA_historico_EBSA.ipynb independiente, utilidades_*.py, pipeline_mensual.py, app_ebsa.py
 
 ```
 
@@ -535,4 +575,4 @@ Secciones: Resumen (cifras del corte, riesgo de fuga, trayectoria, estado en lis
 
 Python 3.10+ con las dependencias de `requirements.txt` (`pip install -r requirements.txt`). Los `.joblib` de LightGBM, XGBoost, CatBoost y scikit-learn dependen de la versión instalada: para dejar constancia de las versiones exactas de la máquina que entrenó los modelos, correr una vez `python scripts\generar_lock_entorno.py`, que escribe `requirements-lock.txt`; otra máquina reproduce el entorno con `pip install -r requirements-lock.txt`. Si un `.joblib` no carga por cambio de versión, la salida es una corrida en modo reentrenar.
 
-Los notebooks se abren desde `C:\Users\Home\Documents\GitHub\ProyectoEBSA\Pipeline_Ebsa`. Las utilidades están en `Pipeline_Ebsa\utilidades\` y el pipeline las agrega automáticamente a `PYTHONPATH`. La búsqueda de hiperparámetros del notebook 7 lleva semilla (`TPESampler(seed=...)`), igual que la del 9, así que una misma serie produce los mismos resultados.
+Los 15 notebooks del pipeline se abren desde `C:\Users\Home\Documents\GitHub\ProyectoEBSA\Pipeline_Ebsa`. `EDA_historico_EBSA.ipynb` se abre y ejecuta aparte, únicamente cuando se necesita explorar o documentar los datos. Las utilidades están en `Pipeline_Ebsa\utilidades\` y el pipeline las agrega automáticamente a `PYTHONPATH`. La búsqueda de hiperparámetros del notebook 7 lleva semilla (`TPESampler(seed=...)`), igual que la del 9, así que una misma serie produce los mismos resultados.
