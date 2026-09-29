@@ -1,6 +1,5 @@
 """
-app_ebsa.py — página web del proyecto EBSA (Streamlit)
-=======================================================
+app_ebsa.py — página web inicial del proyecto EBSA (Streamlit)
 
 Muestra las salidas que ya calculó el pipeline. No entrena ni recalcula nada:
 lee los CSV/parquet de las carpetas de salida y los presenta.

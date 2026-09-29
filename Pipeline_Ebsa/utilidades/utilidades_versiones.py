@@ -1,6 +1,5 @@
 """
 utilidades_versiones.py — histórico de versiones de los modelos
-================================================================
 
 Cada vez que un notebook entrena un modelo (modo reentrenar) guarda, además del
 archivo "vigente" que usa la corrida, una COPIA con el corte en el nombre en
@@ -18,8 +17,6 @@ Con eso se puede:
     (variable de entorno EBSA_VERSION_MODELO; si no existe esa versión de algún
     modelo, el notebook se detiene y lo dice).
 
-Modelos versionados: pronostico (notebook 8), agrupamiento (9), criterios_caida (10),
-riesgo_fuga (14).
 """
 
 from __future__ import annotations

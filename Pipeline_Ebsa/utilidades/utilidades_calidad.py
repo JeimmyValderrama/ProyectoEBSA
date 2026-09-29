@@ -1,6 +1,5 @@
 """
 Control de calidad del mes entrante — EBSA
-==========================================
 
 Por qué existe
 --------------
@@ -18,7 +17,7 @@ salidas equivocadas.
 Uso (Reconstruccion_serie_tiempo_consumo_rural.ipynb, después de unir los
 historico_YYYY.parquet):
 
-    from utilidades_calidad import validar_mes_entrante
+    from utilidades.utilidades_calidad import validar_mes_entrante
 
     reporte = validar_mes_entrante(historico, ciclos_conocidos=CICLOS_CONOCIDOS)
     reporte.to_csv(ruta_reporte, index=False, encoding="utf-8-sig")

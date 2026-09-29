@@ -1,6 +1,5 @@
 """
 utilidades_glosario.py — nombres de negocio para códigos del formato TC2 (GLOSARIO_EBSA.xlsx)
-============================================================================================
 
 Un solo lugar para traducir códigos a texto, de modo que las listas, los exportes
 y la página muestren lo mismo:
@@ -18,7 +17,7 @@ Si un código no está en el glosario, el texto queda como "CICLO 9 (sin nombre 
 o "CLASE XX (sin nombre en glosario)": nunca se inventa un nombre.
 
 Uso:
-    from utilidades_glosario import enriquecer_glosario, atributos_ultimo_mes, GRUPOS_CONSUMO_ORDEN
+    from utilidades.utilidades_glosario import enriquecer_glosario, atributos_ultimo_mes, GRUPOS_CONSUMO_ORDEN
     df = enriquecer_glosario(df)                     # agrega las columnas de texto que pueda
     atrib = atributos_ultimo_mes(DATOS / "01_historico_procesado")   # última fila por NIU (ligero)
 """

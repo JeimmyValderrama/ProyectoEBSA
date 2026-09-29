@@ -1,6 +1,5 @@
 """
 Detección del borde provisional de la serie de consumo — EBSA
-==============================================================
 
 Por qué existe este módulo
 --------------------------
@@ -44,13 +43,11 @@ el último mes está provisional pero el anterior no, el retroceso es 1.
 
 Uso
 ---
-    from utilidades_borde import ultimo_periodo_consolidado
+    from utilidades.utilidades_borde import ultimo_periodo_consolidado
 
     periodo_corte, n_provisionales, detalle = ultimo_periodo_consolidado(
         serie, col_grupo="es_rural",
     )
-
-Colocar este archivo junto a los notebooks para que el import funcione.
 """
 
 from __future__ import annotations
