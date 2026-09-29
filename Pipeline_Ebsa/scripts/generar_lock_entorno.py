@@ -1,10 +1,9 @@
 """
 generar_lock_entorno.py — deja constancia de las versiones exactas instaladas
-==============================================================================
 
 Uso (en la máquina que entrenó los modelos):
 
-    python generar_lock_entorno.py
+    python scripts\\generar_lock_entorno.py
 
 Escribe requirements-lock.txt con la versión exacta de cada paquete que usa el
 proyecto, más la versión de Python. Con ese archivo, otra máquina reproduce el

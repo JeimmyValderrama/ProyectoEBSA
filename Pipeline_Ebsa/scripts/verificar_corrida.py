@@ -1,11 +1,11 @@
 """
 verificar_corrida.py — revisa que la última corrida dejó todo consistente
-=========================================================================
+
 Solo lee. Correr desde Pipeline_Ebsa después de pipeline_mensual.py:
 
-    python verificar_corrida.py
+    python scripts\\verificar_corrida.py
 
-Qué revisa (cada línea sale con ✓ OK, ⚠ AVISO o ✗ ERROR):
+Qué revisa (cada línea sale con OK, AVISO o ERROR):
   1. Histórico: meses sin huecos y el último mes con clientes normales.
   2. Cortes por zona (notebook 3): existen, y el corte urbano es el último mes del histórico.
   3. Pronóstico: una fila por cliente, cada zona con su corte, meses pronosticados
@@ -25,8 +25,6 @@ from pathlib import Path
 import pandas as pd
 import pyarrow.parquet as pq
 
-# Windows: si la salida va a un archivo o a otro proceso (simular_meses.py), Python usa
-# cp1252 y no puede escribir "✓" / "✗". Se fuerza UTF-8 en la salida de este script.
 import sys as _sys
 for _s in (_sys.stdout, _sys.stderr):
     try:

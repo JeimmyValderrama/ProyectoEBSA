@@ -1,14 +1,13 @@
 """
 diagnostico_cruce_fuga.py — ¿los clientes del archivo de OTROS COMERCIALIZADORES aparecen en la historia TC2?
 Solo lee; no escribe nada.
-
 Antes de correrlo:
   1. Crear la carpeta   C:\\Users\\Home\\Documents\\Datos_Ebsa\\00_otros_comercializadores
   2. Copiar allí        USUARIOS_OTROS_COMERCIALIZADORES.xlsx   (el archivo de la empresa, tal cual)
 
 Correr desde Pipeline_Ebsa:
-    python diagnostico_cruce_fuga.py
-    python diagnostico_cruce_fuga.py --archivo "D:\\otra\\ruta\\USUARIOS_OTROS_COMERCIALIZADORES.xlsx"
+    python scripts\\diagnostico_cruce_fuga.py
+    python scripts\\diagnostico_cruce_fuga.py --archivo "D:\\otra\\ruta\\USUARIOS_OTROS_COMERCIALIZADORES.xlsx"
 """
 import argparse
 import os
@@ -17,8 +16,6 @@ from pathlib import Path
 
 import pandas as pd
 
-# Windows: si la salida va a un archivo o a otro proceso (simular_meses.py), Python usa
-# cp1252 y no puede escribir "✓" / "✗". Se fuerza UTF-8 en la salida de este script.
 import sys as _sys
 for _s in (_sys.stdout, _sys.stderr):
     try:

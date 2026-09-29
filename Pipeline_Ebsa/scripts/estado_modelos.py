@@ -1,9 +1,8 @@
 """
 estado_modelos.py — ¿toca reentrenar? Un veredicto por modelo, sin correr nada
-==============================================================================
 Solo lee las salidas que ya dejó la última corrida. Correr desde Pipeline_Ebsa:
 
-    python estado_modelos.py
+    python scripts\\estado_modelos.py
 
 Para cada modelo dice cuándo se entrenó, con qué corte va la corrida actual, qué
 dice el seguimiento en vivo, y termina con una recomendación:
@@ -27,8 +26,6 @@ from pathlib import Path
 import joblib
 import pandas as pd
 
-# Windows: si la salida va a un archivo o a otro proceso (simular_meses.py), Python usa
-# cp1252 y no puede escribir "✓" / "✗". Se fuerza UTF-8 en la salida de este script.
 import sys as _sys
 for _s in (_sys.stdout, _sys.stderr):
     try:

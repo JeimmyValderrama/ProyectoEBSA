@@ -1,6 +1,6 @@
 """
 comparar_modelos.py — ¿se deterioró el modelo? ¿mejoró al reentrenar?
-======================================================================
+
 Solo lee. Se corre después de simular_meses.py (o después de varios meses reales):
 
     python comparar_modelos.py
@@ -27,8 +27,6 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-# Windows: si la salida va a un archivo o a otro proceso (simular_meses.py), Python usa
-# cp1252 y no puede escribir "✓" / "✗". Se fuerza UTF-8 en la salida de este script.
 import sys as _sys
 for _s in (_sys.stdout, _sys.stderr):
     try:

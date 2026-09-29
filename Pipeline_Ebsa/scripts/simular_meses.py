@@ -1,6 +1,5 @@
 """
 simular_meses.py — corre el pipeline mes a mes como si cada mes fuera "hoy"
-===========================================================================
 
 Sirve para dos cosas:
   1. Probar la operación mensual completa con varios meses que ya están en el
@@ -49,7 +48,6 @@ from pathlib import Path
 
 import pandas as pd
 
-# Windows: salida en UTF-8 aunque se redirija a un archivo (para "✓" / "✗").
 for _s in (sys.stdout, sys.stderr):
     try:
         _s.reconfigure(encoding="utf-8", errors="replace")

@@ -1,10 +1,9 @@
 """
 preparar_carpeta_datos.py — crea la estructura de carpetas de Datos_Ebsa
-=========================================================================
 
 Uso (desde GitHub\ProyectoEBSA\Pipeline_Ebsa):
 
-    python preparar_carpeta_datos.py
+    python scripts\\preparar_carpeta_datos.py
 
 Crea las carpetas vacías que faltan (los notebooks también las crean al correr,
 esto solo sirve para verlas de una vez) y dice qué hay que copiar a mano desde

@@ -1,9 +1,9 @@
 """
 diagnostico_glosario.py — ¿qué códigos del histórico NO están en el glosario?
-Solo lee; no escribe nada. Correr desde Pipeline_Ebsa:   python diagnostico_glosario.py
+Solo lee; no escribe nada. Correr desde Pipeline_Ebsa:   python scripts\\diagnostico_glosario.py
 
 Revisa ciclo, clase de servicio, tipo de medidor, tipo de lectura, tipo de factura y estrato
-en 01_historico_procesado, y lista cada valor que no tiene nombre en utilidades_glosario.py,
+en 01_historico_procesado, y lista cada valor que no tiene nombre en utilidades\\utilidades_glosario.py,
 con cuántos NIU lo tienen y si sigue apareciendo en el último mes del histórico.
 """
 import os
@@ -11,8 +11,6 @@ from pathlib import Path
 
 import pandas as pd
 
-# Windows: si la salida va a un archivo o a otro proceso (simular_meses.py), Python usa
-# cp1252 y no puede escribir "✓" / "✗". Se fuerza UTF-8 en la salida de este script.
 import sys as _sys
 for _s in (_sys.stdout, _sys.stderr):
     try:

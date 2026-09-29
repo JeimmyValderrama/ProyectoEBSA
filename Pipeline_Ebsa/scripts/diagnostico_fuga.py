@@ -1,13 +1,11 @@
 """
 diagnostico_fuga.py — ¿cómo se ven en los datos los clientes que se fueron a otro comercializador?
-Solo lee; no escribe nada. Correr desde Pipeline_Ebsa:  python diagnostico_fuga.py
+Solo lee; no escribe nada. Correr desde Pipeline_Ebsa:  python scripts\\diagnostico_fuga.py
 """
 import os
 from pathlib import Path
 import pandas as pd
 
-# Windows: si la salida va a un archivo o a otro proceso (simular_meses.py), Python usa
-# cp1252 y no puede escribir "✓" / "✗". Se fuerza UTF-8 en la salida de este script.
 import sys as _sys
 for _s in (_sys.stdout, _sys.stderr):
     try:
