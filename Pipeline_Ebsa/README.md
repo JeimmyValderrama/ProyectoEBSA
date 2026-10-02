@@ -1,6 +1,3 @@
-<<<<<<< Updated upstream
-# ProyectoEBSA
-=======
 # Proyecto EBSA — Consumo de energía por cliente
 
 > Para entender cómo funciona todo por dentro (flujo de datos, cada notebook, los cortes por zona, y cómo se evalúa: backtest, seguimiento en vivo y simulación), leer **`GUIA_TECNICA.md`**. Los comandos del día a día están en **`COMANDOS.md`**.
@@ -156,6 +153,13 @@ Carpeta `10_riesgo_fuga\` (notebook 14). Todo con corte en el último mes consol
 **Cómo se ve una salida en TC2.** En los datos reales, el cliente que se cambia **no desaparece**: sigue apareciendo con 0 kWh y solo meses después deja de estar en el archivo. Por eso el mes de salida es el más temprano entre su primer mes en el archivo de otros comercializadores, su primer mes de consumo cero sostenido (≥ 3 meses) y el mes siguiente a su última fila; y si algún día el TC2 trae el ciclo 97 (OTROS COMERCIALIZADORES), cuenta automáticamente.
 
 **Niveles.** ALTO: probabilidad ≥ 5 veces la tasa base o dentro del 1 % más alto; MEDIO: ≥ 2 veces la tasa base o dentro del 5 % más alto. Así siempre hay una lista corta para trabajar aunque el riesgo general sea bajo.
+
+### 3.2b-bis Reglas de negocio de las listas (experto de negocio, 2026-10-02)
+
+- **Clases sin gestión**: área común (AC), autoconsumos EBSA (AU), distritos de riego (RI) y provisionales (PR) no entran a la lista de caída ni al riesgo de fuga (`CLASES_SIN_GESTION` en `utilidades_glosario.py`). Siguen en la serie y en el pronóstico. El notebook 11 deja los retirados en `07_gestion_caida\clientes_excluidos_de_gestion.csv`.
+- **Autogeneradores** (ciclo 50 actual): fuera de todo el universo (sección 5.3).
+- **Zona regional**: columna `zona_regional` en todas las listas (`ZONA_REGIONAL_POR_CICLO`): CENTRO = ciclos 0, 9, 10, 19; TUNDAMA = 1, 11; SUGAMUXI = 2, 12; OCCIDENTE = 3, 22; ORIENTE = 4, 13; NORTE = 5, 21; RICAURTE = 6, 23; PUERTO BOYACÁ = 7, 38. Es la dirección regional que decide las acciones en terreno; el ciclo detallado se conserva para las cuadrillas. La página filtra y resume por zona regional.
+- `verificar_corrida.py` marca ERROR si alguna clase sin gestión o un autogenerador aparece en las listas, o un no regulado en el ranking de fuga.
 
 ### 3.2c Exportes por grupo de consumo (lo que descarga la página)
 
@@ -426,11 +430,14 @@ pip install streamlit plotly           # una sola vez
 python -m streamlit run app_ebsa.py    # se abre en http://localhost:8501
 ```
 
-Secciones: Resumen (cifras del corte, riesgo de fuga, trayectoria, estado en lista, valor por ciclo, severidad), Gestión por ciclo (lista operativa por ciclo con el nombre de la zona, filtrable por grupo de consumo y descargable), Ranking gerencial, **Riesgo de fuga** (lista filtrable por nivel, zona, grupo, clase y municipio; resumen por zona y grupo; los que ya están con otro comercializador y su perfil; vigilancia del mercado no regulado, que es donde viven los no regulados, fuera del ranking; calidad del modelo; seguimiento), Cortes (clase, estrato, zona, tramo), **Mapa** (municipios de Boyacá, sección 9b), Buscar cliente (ubicación, segmento, caída, posición en la lista, riesgo de fuga y pronóstico a 6 meses de un NIU, con aviso si es autogenerador o de mercado no regulado; el buscador de ejemplos muestra ciclo, zona y municipio de **todos** los clientes y la situación de cada uno en caída y en fuga, filtrable por grupo, segmento, ciclo, municipio, situación en caída y riesgo de fuga), Pronóstico 6 meses (totales proyectados y precisión por grupo de consumo), **Descargas por grupo** (los archivos de `11_exportes_negocio\`), Seguimiento, Retroalimentación y Estado del pipeline. Todas las tablas muestran zona, clase de servicio, tipo de medidor y de lectura, promedio semestral y valor facturado con los nombres del glosario. La carpeta de datos se toma de `EBSA_DATOS` o se cambia en la barra lateral.
+La página tiene **tres vistas** (barra lateral), una por público:
+
+- **Comercial** (lenguaje de negocio): *Panorama* (clientes con caída para revisar, facturación que se está perdiendo, clientes con riesgo de irse y pérdida esperada, caídas graves, nuevos en la lista, ya con otro comercializador, grandes clientes en vigilancia; mapa de Boyacá por municipio con la cifra elegida; de qué clases y tamaños viene el valor; qué cambió frente al mes anterior), *Clientes con riesgo de irse* (prioridad, municipio, factura hoy, probabilidad, por qué, situación; y aparte los grandes clientes no regulados), *Grandes caídas de consumo* (consumía / consume ahora / caída / facturación que se pierde / gravedad / tendencia), *Clientes que ya se fueron* y *Descargas*.
+- **Soporte** (atención al cliente y campo): *Consultar un cliente* (ficha en lenguaje simple: dónde está, clase y tamaño, qué le pasa al consumo, riesgo de irse, avisos de autogenerador / no regulado / ya con otro comercializador, **qué revisar o qué decirle**, y la gráfica de consumo y pronóstico; con buscador por municipio, gravedad y tendencia), *Visitas por ciclo* (ruta de visita con municipio y dirección del TC1, orden por facturación perdida, filtros y mapa de los clientes del ciclo) y *Registrar resultado de visitas*.
+- **Administrador del modelo** (todo lo técnico): Resumen (cifras del corte, riesgo de fuga, trayectoria, estado en lista, valor por ciclo, severidad), Gestión por ciclo (lista operativa por ciclo con el nombre de la zona, filtrable por grupo de consumo y descargable), Ranking gerencial, **Riesgo de fuga** (lista filtrable por nivel, zona, grupo, clase y municipio; resumen por zona y grupo; los que ya están con otro comercializador y su perfil; vigilancia del mercado no regulado, que es donde viven los no regulados, fuera del ranking; calidad del modelo; seguimiento), Cortes (clase, estrato, zona, tramo), **Mapa** (municipios de Boyacá, sección 9b), Buscar cliente (ubicación, segmento, caída, posición en la lista, riesgo de fuga y pronóstico a 6 meses de un NIU, con aviso si es autogenerador o de mercado no regulado; el buscador de ejemplos muestra ciclo, zona y municipio de **todos** los clientes y la situación de cada uno en caída y en fuga, filtrable por grupo, segmento, ciclo, municipio, situación en caída y riesgo de fuga), Pronóstico 6 meses (totales proyectados y precisión por grupo de consumo), **Descargas por grupo** (los archivos de `11_exportes_negocio\`), Seguimiento, Retroalimentación y Estado del pipeline. Todas las tablas muestran zona, clase de servicio, tipo de medidor y de lectura, promedio semestral y valor facturado con los nombres del glosario. La carpeta de datos se toma de `EBSA_DATOS` o se cambia en la barra lateral.
 
 ## 11. Entorno
 
 Python 3.10+ con las dependencias de `requirements.txt` (`pip install -r requirements.txt`). Los `.joblib` de LightGBM, XGBoost, CatBoost y scikit-learn dependen de la versión instalada: para dejar constancia de las versiones exactas de la máquina que entrenó los modelos, correr una vez `python generar_lock_entorno.py`, que escribe `requirements-lock.txt`; otra máquina reproduce el entorno con `pip install -r requirements-lock.txt`. Si un `.joblib` no carga por cambio de versión, la salida es una corrida en modo reentrenar.
 
 Los notebooks se abren desde `C:\Users\Home\Documents\GitHub\ProyectoEBSA\Pipeline_Ebsa` con `utilidades_borde.py`, `utilidades_calidad.py` y `utilidades_glosario.py` en esa misma carpeta. La búsqueda de hiperparámetros del notebook 7 lleva semilla (`TPESampler(seed=...)`), igual que la del 9, así que una misma serie produce los mismos resultados.
->>>>>>> Stashed changes
