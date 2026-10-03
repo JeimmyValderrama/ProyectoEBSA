@@ -118,6 +118,7 @@ Tres vistas: (1) el WAPE en vivo corte a corte con la versión del modelo que pr
 | Comando | Para qué |
 |---|---|
 | `pip install -r requirements.txt` | Instalar las librerías (pandas, LightGBM, XGBoost, CatBoost, Optuna, Streamlit, etc.). |
+| `copy secrets.toml.ejemplo .streamlit\secrets.toml` y editar las claves | Usuarios de la página (`comercial`, `soporte` y `admin`). El archivo no va a Git: hay que crearlo en cada máquina. |
 | `python preparar_carpeta_datos.py` | Crear la estructura de carpetas de `Datos_Ebsa` y ver qué hay que copiar del proyecto anterior. |
 | `python generar_lock_entorno.py` | Escribir `requirements-lock.txt` con las versiones exactas instaladas, para reproducir el entorno en otra máquina (`pip install -r requirements-lock.txt`). Los `.joblib` dependen de la versión. |
 
@@ -131,11 +132,22 @@ Tres vistas: (1) el WAPE en vivo corte a corte con la versión del modelo que pr
 
 ---
 
+## 4d. Proyección de consumo por zona (compra de energía) — aparte del pipeline
+
+```
+pip install statsmodels
+python proyeccion_anual_consumo.py
+```
+
+Agrega la serie consolidada por zona regional, ajusta Holt-Winters / SARIMA, mide el error con backtest y proyecta 36 meses con bandas; deja `14_proyeccion_anual\` y alimenta la sección *Proyección de consumo (compra de energía)* de la vista Comercial. Tarda unos minutos. Repetir después de cada corrida mensual si se quiere la proyección al día (no hace falta cada mes). Opciones: `--meses 48`, `--umbral 12`.
+
 ## 6b. Decisiones de negocio que ya están en el código (no hay que configurarlas)
 
 - **Autogeneradores (ciclo 50)**: fuera de todo el universo por su ciclo **actual** (último conocido), no por el más frecuente. Un cliente que acaba de pasar a autogenerador cae de consumo por diseño; antes se colaba en la lista de caída como CRÍTICA. Si vuelve a un ciclo normal, reingresa solo en la corrida siguiente. `verificar_corrida.py` marca ERROR si alguno aparece en la lista de caída.
 - **Mercado no regulado (ciclo 33, clase IR o ≥ 55.000 kWh/mes)**: se puntúa con el modelo de fuga pero solo aparece en la pestaña *Vigilancia no regulados*; nunca en el ranking, las listas, los resúmenes ni los exportes. `verificar_corrida.py` marca ERROR si alguno aparece en el ranking.
 - **Clases sin gestión (AC área común, AU autoconsumos EBSA, RI distritos de riego, PR provisionales)**: fuera de la lista de caída y del riesgo de fuga; siguen en la serie y el pronóstico. Los retirados quedan en `07_gestion_caida\clientes_excluidos_de_gestion.csv`.
+- **Cero sostenido (3+ meses en 0)**: fuera de la lista de caída; quedan en `07_gestion_caida\clientes_cero_sostenido.csv` con lo que facturaban antes (la página los muestra en *Clientes que ya se fueron*).
+- **Estacionales**: ya estuvieron en cero y volvieron, y el pronóstico prevé recuperación → `prioridad_gestion = VIGILAR: estacional`, al final del ciclo. **Fuga**: el top % de la lista solo aplica con probabilidad ≥ tasa base.
 - **Zona regional**: columna `zona_regional` en todas las listas (ciclo urbano + rural + seccionales de una misma dirección). La página filtra y resume por ella.
 - **Etiqueta de ciclo de la lista operativa**: es el ciclo actual del cliente (la ruta de hoy), para que coincida con la zona del glosario que sale de los atributos del último mes.
 

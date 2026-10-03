@@ -191,6 +191,10 @@ if existe(ruta_op, "la lista operativa"):
         n_cl = int(g["clase_servicio"].astype(str).str.strip().str.upper().isin(CLASES_SIN_GESTION).sum())
         linea("OK" if n_cl == 0 else "ERROR",
               f"clases sin gestión {sorted(CLASES_SIN_GESTION)} en la lista de caída: {n_cl:,} (deben ser 0)")
+    if "consumo_reciente_kwh" in g.columns and "meses_ventana" in g.columns:
+        n_cero = int(((pd.to_numeric(g["consumo_reciente_kwh"], errors="coerce").fillna(0) <= 0)
+                      & (pd.to_numeric(g["meses_ventana"], errors="coerce").fillna(0) >= 3)).sum())
+        linea("OK" if n_cero == 0 else "ERROR", f"clientes en cero sostenido (3+ meses en 0) dentro de la lista de caída: {n_cero:,} (deben ser 0; van en clientes_cero_sostenido.csv)")
     linea("OK" if "zona_regional" in g.columns else "AVISO", "columna zona_regional: " + ("presente" if "zona_regional" in g.columns else "FALTA (corre el paso 11 con la versión actual)"))
     copia = BASE / "07_gestion_caida" / "historial" / f"gestion_caida_operativa_corte_{CORTES.get('URBANO', pd.Timestamp('1900-01-01')):%Y-%m}.csv"
     linea("OK" if copia.exists() else "ERROR", f"copia versionada del corte: {copia.name}")

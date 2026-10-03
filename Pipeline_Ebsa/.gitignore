@@ -1,0 +1,4 @@
+# Claves de la página: se quedan en cada máquina
+.streamlit/secrets.toml
+__pycache__/
+*.pyc

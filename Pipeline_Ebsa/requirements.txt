@@ -32,3 +32,4 @@ nbclient>=0.9          # pipeline_mensual.py ejecuta los notebooks con esto
 streamlit>=1.35        # app_ebsa.py (página web)
 plotly>=5.18           # app_ebsa.py, sección Mapa (si falta, la página dibuja un mapa básico)
 xlrd>=2.0              # cruzar_ubicacion_tc1.py: lee Código DANE.xls
+statsmodels>=0.14      # proyeccion_anual_consumo.py: Holt-Winters y SARIMA por zona
