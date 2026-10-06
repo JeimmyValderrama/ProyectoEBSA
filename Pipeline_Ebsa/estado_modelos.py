@@ -16,7 +16,8 @@ Reglas (las mismas que usan los notebooks para avisar):
                  (dif_vs_backtest_pp > 5) en la mayoría de los horizontes durante 2+ cortes.
   Agrupamiento : > 12 meses sin reentrenar (los segmentos se mantienen estables a propósito).
   Caída        : algún segmento cambiaría de criterio, o umbrales que se movieron > 10 puntos
-                 (deriva_criterios_caida.csv, que se recalcula cada mes en modo aplicar).
+                 (deriva_criterios_caida.csv, que se recalcula cada mes en modo aplicar; una deriva medida
+                 antes del último recálculo de criterios no cuenta).
   Riesgo de fuga: > 12 meses sin reentrenar; o el archivo de otros comercializadores es más nuevo
                  que el modelo y trae salidas en meses que el modelo no pudo ver (el notebook 14 solo
                  aprende de los cortes cuya ventana de 6 meses cabe dentro del archivo); o los
@@ -146,7 +147,14 @@ if ruta.exists():
     print(f"  Criterios calculados el {str(c.get('fecha_calculo', ''))[:10]} con ventana hasta "
           f"{str(c['ventana'].get('corte_urbano', c['ventana'].get('fin_efectivo', '')))[:7]}")
     deriva = BASE / "06_estudio_caida" / "deriva_criterios_caida.csv"
-    if deriva.exists():
+    # La deriva se mide en modo aplicar (umbrales guardados vs. recalculados). Si los criterios se recalcularon
+    # DESPUÉS de esa medición (reentrenar --solo 10,...), el archivo de deriva describe a los criterios viejos y
+    # no debe volver a pedir reentrenar: la deriva vigente se medirá en la próxima corrida mensual en modo aplicar.
+    deriva_vieja = deriva.exists() and deriva.stat().st_mtime < ruta.stat().st_mtime
+    if deriva.exists() and deriva_vieja:
+        print("  Deriva: la última medición es anterior al recálculo de los criterios (modo reentrenar); "
+              "ya no aplica. Se vuelve a medir en la próxima corrida mensual en modo aplicar.")
+    elif deriva.exists():
         d = pd.read_csv(deriva)
         cambian = d[d["cambia_criterio"].astype(str).str.lower().eq("true")]
         movidos = d[pd.to_numeric(d["dif_umbral_pct"], errors="coerce").abs() > 10]
