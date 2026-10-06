@@ -152,6 +152,8 @@ Carpeta `10_riesgo_fuga\` (notebook 14). Todo con corte en el último mes consol
 
 **Cómo se ve una salida en TC2.** En los datos reales, el cliente que se cambia **no desaparece**: sigue apareciendo con 0 kWh y solo meses después deja de estar en el archivo. Por eso el mes de salida es el más temprano entre su primer mes en el archivo de otros comercializadores, su primer mes de consumo cero sostenido (≥ 3 meses) y el mes siguiente a su última fila; y si algún día el TC2 trae el ciclo 97 (OTROS COMERCIALIZADORES), cuenta automáticamente.
 
+**Validación (2026-10-06).** El modelo se evalúa por cortes en el tiempo; desde esta fecha los cortes de validación entran **sin submuestreo de negativos** (antes iban al ~17 %, lo que inflaba la precisión y el *lift* del top 100), y la variable `tasa_salida_zona` se calcula **en cada corte** solo con las salidas conocidas hasta ese mes (antes era una sola tasa con todo el archivo, igual en todos los cortes).
+
 **Niveles.** ALTO: probabilidad ≥ 5 veces la tasa base o dentro del 1 % más alto; MEDIO: ≥ 2 veces la tasa base o dentro del 5 % más alto. Así siempre hay una lista corta para trabajar aunque el riesgo general sea bajo.
 
 ### 3.2b-bis Reglas de negocio de las listas (experto de negocio, 2026-10-02)
@@ -280,7 +282,7 @@ Todos los notebooks se corren de arriba abajo, con **kernel reiniciado**, en est
 - `nius_autogeneradores_excluidos.parquet` — los NIU cuyo **ciclo actual** es 50 (AUTOGENERADORES). Se excluyen del universo completo (serie, pronóstico, segmentación, caída y fuga): generan parte de su energía, así que su consumo de la red cae por diseño y una "caída" en ellos no es gestionable. Se usa el ciclo actual y no el más frecuente porque el caso típico es un cliente que llevaba años en un ciclo normal y acaba de pasar a autogenerador (decisión 2026-10-02); si vuelve a un ciclo normal, reingresa en la corrida siguiente.
 - `auditoria_preprocesamiento_modelado.csv`, `auditoria_cobertura_mensual.csv` — cuántos clientes y cuánto consumo quedó por mes después de cada filtro.
 
-En `02_serie_reconstruida\` queda además `control_calidad_mes_entrante.csv` (notebook 2): un chequeo por fila (columnas esenciales, clientes vs. previos, consumo total, tarifa, ciclos nuevos, duplicados, fechas de lectura) con `resultado` OK / ERROR / AVISO y el detalle. Los umbrales están documentados en `utilidades_calidad.py`.
+En `02_serie_reconstruida\` queda además `control_calidad_mes_entrante.csv` (notebook 2): un chequeo por fila (columnas esenciales, clientes vs. previos, **clientes con lectura frente al mes anterior y ciclos urbanos sin leer** — añadidos el 2026-10-06 tras el archivo de prueba de mayo, que traía filas pero no el consumo del mes para parte de los urbanos; ERROR si los urbanos con dato caen más de 5 % —, consumo total, tarifa, ciclos nuevos, duplicados, fechas de lectura) con `resultado` OK / ERROR / AVISO y el detalle. Los umbrales están documentados en `utilidades_calidad.py`.
 
 ### 5.4 `04_pronostico\desarrollo_01_modelo_unico\` (notebook 4) y `04_pronostico\desarrollo_02_segmentado\` (notebook 5) — referencia
 
@@ -386,14 +388,14 @@ python pipeline_mensual.py --modo aplicar --datos "D:\otra\Datos_Ebsa"   # solo 
 
 Los notebooks 8, 9, 10 y 14 leen la variable de entorno `EBSA_MODO` (la fija `pipeline_mensual.py`; si se abren a mano en Jupyter, vale el valor por defecto de la primera celda, `reentrenar`).
 
-| | `aplicar` (cada mes) | `reentrenar` (cada trimestre o semestre) |
+| | `aplicar` (cada mes) | `reentrenar` (una vez al año, o cuando `estado_modelos.py` lo pida) |
 |---|---|---|
 | Pronóstico (8) | Carga `modelos_ganadores_optimizados_final.joblib`, verifica el contrato y pronostica desde el último mes consolidado. No hace backtest. | Backtest + reentrenamiento con toda la historia + pronóstico. Sobreescribe el `.joblib`. Horas. |
 | Agrupamiento (9) | Carga `modelo_agrupamiento.joblib` y asigna cluster y nombre guardados. Los segmentos no cambian de nombre entre meses. | Comparación de algoritmos con Optuna y nuevos nombres. Sobreescribe el `.joblib`. |
 | Caída (10) | Usa `criterios_caida_por_segmento.joblib`: la misma regla que el mes anterior. Guarda la deriva en `deriva_criterios_caida.csv`. | Recalcula los umbrales y los guarda. |
-| Riesgo de fuga (14) | Carga `modelo_riesgo_fuga.joblib` y puntúa el corte nuevo; avisa si la población elegible cambió o el modelo lleva más de 6 meses. | Rearma el conjunto de entrenamiento con todos los cortes, evalúa en los últimos 6 cortes con ventana completa, entrena con todo y guarda el `.joblib`. Minutos, no horas: se puede reentrenar cada mes con `--solo 14,15`. |
+| Riesgo de fuga (14) | Carga `modelo_riesgo_fuga.joblib` y puntúa el corte nuevo; avisa si la población elegible cambió o el modelo lleva más de 12 meses. | Rearma el conjunto de entrenamiento con todos los cortes, evalúa en los últimos 6 cortes con ventana completa, entrena con todo y guarda el `.joblib`. Minutos, no horas: se puede reentrenar cada mes con `--solo 14,15`. |
 
-**Cuándo toca reentrenar.** Cualquiera de estas señales: el notebook 8 avisa que el modelo lleva más de 6 meses sin reentrenar; en `seguimiento_pronostico_por_perfil.csv` la columna `dif_vs_backtest_pp` es claramente positiva varios meses seguidos; el notebook 9 avisa que el perfil de un cluster ya no corresponde a su nombre; el notebook 10 avisa que algún segmento cambiaría de criterio o que los umbrales se movieron más de 10 puntos; el notebook 14 avisa que la población elegible cambió (una clase nueva en el archivo de otros comercializadores) o que en `seguimiento_riesgo_fuga.csv` los señalados ALTO no se van más que la tasa base. Antes de reentrenar conviene correr también 6 y 7 si se quiere revisar la elección de algoritmos e hiperparámetros; si no, el 8 reutiliza los que están.
+**Cuándo toca reentrenar.** La política acordada por el equipo (evaluada con la simulación de once cortes: la edad del modelo no explica el error y reentrenar a los ocho meses movió 0,1 puntos de WAPE) es **pronóstico y agrupamiento una vez al año**, para que el modelo incorpore un ciclo estacional completo más, y antes solo si `estado_modelos.py` lo pide por alguna de estas señales: el notebook 8 avisa que el modelo lleva más de 12 meses sin reentrenar (`MESES_MAX = 12`); en `seguimiento_pronostico_por_perfil.csv` la columna `dif_vs_backtest_pp` es claramente positiva varios meses seguidos; el notebook 9 avisa que el perfil de un cluster ya no corresponde a su nombre; el notebook 10 avisa que algún segmento cambiaría de criterio o que los umbrales se movieron más de 10 puntos; el notebook 14 avisa que la población elegible cambió (una clase nueva en el archivo de otros comercializadores) o que en `seguimiento_riesgo_fuga.csv` los señalados ALTO no se van más que la tasa base. Antes de reentrenar conviene correr también 6 y 7 si se quiere revisar la elección de algoritmos e hiperparámetros; si no, el 8 reutiliza los que están.
 
 ## 9. Retroalimentación de campo
 
@@ -447,6 +449,8 @@ python -m streamlit run app_ebsa.py    # se abre en http://localhost:8501
 ```
 
 **Usuarios.** La página pide usuario y clave al abrir. Los usuarios están en `.streamlit\secrets.toml` (junto a `app_ebsa.py`; ese archivo está en `.gitignore`, así que se copia a mano a cada máquina a partir de `secrets.toml.ejemplo`): `comercial` abre solo la vista Comercial; `soporte` abre Soporte y Comercial; `admin` abre las tres y es el único que puede cambiar la carpeta de datos. Un mes nuevo no se incorpora desde la página: se corre el pipeline por consola (sección 7) y la página solo lee el resultado. Para cambiar una clave o agregar un usuario se edita ese archivo (cada usuario tiene `nombre`, `clave` y `vistas`) y se vuelve a abrir la página. *Cerrar sesión* está en la barra lateral.
+
+**Para compartir solo la página.** `python empaquetar_app.py` arma una carpeta autónoma (app + usuarios + `datos\` con únicamente las salidas que la página lee, sin archivos de la empresa ni modelos) con un `INICIAR_APP.bat`; la app toma la carpeta `datos\` que esté junto a ella si existe, luego `EBSA_DATOS`, y si no la ruta de siempre.
 
 La página tiene **tres vistas** (barra lateral), una por público:
 

@@ -34,6 +34,15 @@ Qué revisa (cada chequeo dice si es ERROR o AVISO)
                         más reciente suele traer fila para todos los clientes,
                         rurales sin lectura trimestral incluidos (enero 2026:
                         579 mil frente a 358 mil de un mes normal).
+  clientes_con_lectura  ERROR si los clientes URBANOS con dato de consumo en el mes caen
+                        más de 5% frente al mes inmediatamente anterior (rural: AVISO si
+                        caen más de 50%, porque su lectura es trimestral). Distinto del
+                        conteo de filas: un archivo puede traer la fila de todos los
+                        clientes y venir sin el consumo del mes para una parte (así llegó
+                        el archivo de prueba de mayo de 2026); esos clientes se quedan sin
+                        pronóstico. Añadido 2026-10-06.
+  ciclos_urbanos_sin_lectura  AVISO si algún ciclo urbano pierde más de 20% de sus clientes
+                        con lectura frente al mes anterior (huella de un ciclo sin leer).
   consumo_total         ERROR si el consumo total URBANO del mes queda por debajo
                         del 55% de la mediana previa (rural: AVISO). (El último mes siempre llega
                         algo bajo por las lecturas trimestrales pendientes de
@@ -102,6 +111,9 @@ def validar_mes_entrante(
     tarifa_max: float = 3000.0,
     tarifa_nula_max_pct: float = 5.0,
     fechas_faltantes_max_pct: float = 20.0,
+    lectura_caida_max_pct: float = 5.0,
+    lectura_caida_rural_pct: float = 50.0,
+    lectura_caida_ciclo_pct: float = 20.0,
     estricto: bool = True,
     verbose: bool = True,
 ) -> pd.DataFrame:
@@ -179,6 +191,51 @@ def validar_mes_entrante(
         else:
             filas.append(_fila(f"clientes_caida_{zona.lower()}", "AVISO", True, n_z, np.nan,
                                "sin meses previos para comparar"))
+
+    # --- clientes CON LECTURA (consumo con dato) frente al mes inmediatamente anterior ---
+    # Distinto del conteo de filas de arriba: un archivo puede traer la fila de todos los
+    # clientes y aun así venir sin el consumo del mes para una parte de ellos (el archivo de
+    # prueba de mayo de 2026 llegó así). Un cliente sin dato en el mes de corte se queda sin
+    # pronóstico y su caída no se puede evaluar, así que en urbanos es ERROR si caen más de
+    # lectura_caida_max_pct; en rurales solo AVISO con un tope amplio, porque su lectura es
+    # trimestral y el número de rurales con dato cambia mucho de un mes a otro. Además se
+    # revisa ciclo por ciclo (urbanos): AVISO si un ciclo pierde más de lectura_caida_ciclo_pct
+    # de sus clientes con lectura, que es la huella de un ciclo que no se leyó. (2026-10-06)
+    if len(meses) > 1:
+        mes_prev = pd.Timestamp(meses[-2])
+        con_dato = datos[pd.to_numeric(datos["consumo_kwh_raw"], errors="coerce").notna()]
+        act_d = con_dato[con_dato["mes"].eq(mes_actual)]
+        prev_d = con_dato[con_dato["mes"].eq(mes_prev)]
+        for zona in ("URBANO", "RURAL"):
+            nivel = "ERROR" if zona == "URBANO" else "AVISO"
+            tope = lectura_caida_max_pct if zona == "URBANO" else lectura_caida_rural_pct
+            n_a = int(act_d.loc[act_d["zona"].eq(zona), "NIU"].nunique())
+            n_p = int(prev_d.loc[prev_d["zona"].eq(zona), "NIU"].nunique())
+            cambio = (n_a - n_p) / n_p * 100 if n_p > 0 else 0.0
+            filas.append(_fila(
+                f"clientes_con_lectura_{zona.lower()}", nivel, cambio >= -tope, n_a, n_p,
+                (f"{cambio:+.1f}% de clientes con consumo del mes frente a {mes_prev:%Y-%m} " if n_p > 0
+                 else f"el mes anterior ({mes_prev:%Y-%m}) no tenía clientes {'urbanos' if zona == 'URBANO' else 'rurales'} con consumo (normal en rurales fuera del mes de lectura) ")
+                + (f"(error si caen más de {tope:.0f}%: archivo incompleto, esos clientes quedarían sin pronóstico)"
+                   if zona == "URBANO" else f"(aviso si caen más de {tope:.0f}%; la lectura rural es trimestral)"),
+            ))
+        urb_a = act_d[act_d["zona"].eq("URBANO")].groupby(pd.to_numeric(act_d.loc[act_d["zona"].eq("URBANO"), "ciclo"], errors="coerce"))["NIU"].nunique()
+        urb_p = prev_d[prev_d["zona"].eq("URBANO")].groupby(pd.to_numeric(prev_d.loc[prev_d["zona"].eq("URBANO"), "ciclo"], errors="coerce"))["NIU"].nunique()
+        perdidos = []
+        for c, n_p in urb_p.items():
+            # solo las rutas urbanas de lectura (ciclos 0 a 9); los ciclos especiales (33 no regulados,
+            # 90 servicios internos, ...) son pequeños y cambian por razones administrativas
+            if pd.isna(c) or not (0 <= int(c) <= 9) or n_p < 200:
+                continue
+            n_a = int(urb_a.get(c, 0))
+            cambio = (n_a - n_p) / n_p * 100
+            if cambio < -lectura_caida_ciclo_pct:
+                perdidos.append(f"ciclo {int(c):02d}: {n_a:,} de {n_p:,} ({cambio:+.0f}%)")
+        filas.append(_fila(
+            "ciclos_urbanos_sin_lectura", "AVISO", not perdidos, len(perdidos), 0,
+            ("ciclos urbanos que perdieron más de %.0f%% de sus clientes con lectura frente a %s: " % (lectura_caida_ciclo_pct, f"{mes_prev:%Y-%m}")
+             + "; ".join(perdidos)) if perdidos else f"ningún ciclo urbano perdió más de {lectura_caida_ciclo_pct:.0f}% de sus clientes con lectura",
+        ))
 
     # --- duplicados dentro del mes ---
     dup = int(actual.duplicated(subset=["NIU"]).sum())

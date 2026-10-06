@@ -63,8 +63,11 @@ st.markdown("""<style>
 [data-testid="stMetricLabel"] { white-space: normal; }
 </style>""", unsafe_allow_html=True)
 
-# Carpeta de datos: C:\Users\Home\Documents\Datos_Ebsa (o la variable de entorno EBSA_DATOS)
-DATOS_POR_DEFECTO = os.environ.get("EBSA_DATOS", r"C:\Users\Home\Documents\Datos_Ebsa")
+# Carpeta de datos, en este orden: variable de entorno EBSA_DATOS; una carpeta "datos" junto a la app
+# (paquete para compañeros, ver empaquetar_app.py); la carpeta de siempre.
+_DATOS_JUNTO_A_LA_APP = Path(__file__).resolve().parent / "datos"
+DATOS_POR_DEFECTO = os.environ.get("EBSA_DATOS") or (str(_DATOS_JUNTO_A_LA_APP) if _DATOS_JUNTO_A_LA_APP.is_dir()
+                                                     else r"C:\Users\Home\Documents\Datos_Ebsa")
 
 # Colores: un solo tono para magnitudes; naranja solo cuando hay dos series.
 AZUL = "#2a78d6"

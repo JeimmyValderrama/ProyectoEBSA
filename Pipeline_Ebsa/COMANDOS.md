@@ -23,11 +23,11 @@ Si un paso falla, el pipeline se detiene, dice por qué y con qué comando reanu
 
 ---
 
-## 2. Reentrenar (cada trimestre o semestre, o cuando el seguimiento lo pida)
+## 2. Reentrenar (una vez al año, o cuando `estado_modelos.py` lo pida)
 
 | Comando | Qué hace | Cuándo |
 |---|---|---|
-| `python pipeline_mensual.py --modo reentrenar` | Lo mismo que la corrida mensual, pero además reentrena el pronóstico (backtest + entrenamiento, ~1 hora extra), vuelve a comparar algoritmos de agrupamiento, recalcula los criterios de caída y reentrena el riesgo de fuga con Optuna. Sobreescribe los `.joblib`. | Cada 3–6 meses; o cuando el paso 8 avise que el modelo lleva más de 6 meses; o cuando en `08_seguimiento\seguimiento_pronostico_por_perfil.csv` la columna `dif_vs_backtest_pp` sea claramente positiva varios meses seguidos; o cuando el 9 o el 10 avisen que los segmentos o los umbrales ya no corresponden. |
+| `python pipeline_mensual.py --modo reentrenar` | Lo mismo que la corrida mensual, pero además reentrena el pronóstico (backtest + entrenamiento, ~1 hora extra), vuelve a comparar algoritmos de agrupamiento, recalcula los criterios de caída y reentrena el riesgo de fuga con Optuna. Sobreescribe los `.joblib`. | **Una vez al año** (tope `MESES_MAX = 12` en `estado_modelos.py`), para que el modelo incorpore un ciclo estacional completo más; antes de eso solo si `estado_modelos.py` dice REENTRENAR por el seguimiento (dos cortes seguidos con más de la mitad de las celdas perfil × horizonte con WAPE en vivo por encima del backtest), o ante cambios estructurales (revisión tarifaria grande, cambio en la lectura rural, ciclos nuevos, llegada de archivos de años anteriores). Evidencia: en la simulación de 11 cortes el modelo de 7 meses pronosticaba igual que el recién entrenado y reentrenar movió 0,1 puntos de WAPE (Anexo E.3 del informe). Los criterios de caída se recalculan cuando `estado_modelos.py` avise deriva de umbrales > 10 puntos (es barato: `--solo 10,11,15`). |
 | `python pipeline_mensual.py --modo reentrenar --solo 14,15` | Reentrena solo el riesgo de fuga (minutos) y rehace los exportes. | Cada vez que la empresa entregue una versión nueva del archivo de otros comercializadores con más casos, o cuando `10_riesgo_fuga\seguimiento_riesgo_fuga.csv` muestre que los señalados ALTO no se van más que la tasa base. |
 
 ---
@@ -140,6 +140,13 @@ python proyeccion_anual_consumo.py
 ```
 
 Agrega la serie consolidada por zona regional, ajusta Holt-Winters / SARIMA, mide el error con backtest y proyecta 36 meses con bandas; deja `14_proyeccion_anual\` y alimenta la sección *Proyección de consumo (compra de energía)* de la vista Comercial. Tarda unos minutos. Repetir después de cada corrida mensual si se quiere la proyección al día (no hace falta cada mes). Opciones: `--meses 48`, `--umbral 12`.
+
+## 4e. Carpeta para que un compañero solo abra la página (sin pipeline)
+
+```
+python empaquetar_app.py
+```
+Deja `C:\Users\Home\Documents\EBSA_app_para_compartir\` con la app, los usuarios, `INICIAR_APP.bat`, `LEEME.txt` y una carpeta `datos\` con solo lo que la página lee (~600 MB; `--sin-exportes` la deja en ~250 MB sin la sección Descargas). Se comprime y se envía. En el otro PC: `pip install -r requirements_app.txt` y doble clic en `INICIAR_APP.bat`; la página encuentra `datos\` sola. Cuando haya un mes nuevo se vuelve a empaquetar y se reenvía (la copia no se actualiza sola).
 
 ## 6b. Decisiones de negocio que ya están en el código (no hay que configurarlas)
 
