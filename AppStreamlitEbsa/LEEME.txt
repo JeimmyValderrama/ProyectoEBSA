@@ -1,0 +1,13 @@
+EBSA - Consumo de clientes: pagina para consulta (sin pipeline)
+=================================================================
+1. Instalar Python 3.10 o superior (https://www.python.org, marcar "Add python to PATH").
+2. En esta carpeta abrir una consola y correr una sola vez:   pip install -r requirements_app.txt
+3. Doble clic en INICIAR_APP.bat (o en consola: python -m streamlit run app_ebsa.py).
+   Se abre en el navegador en http://localhost:8501
+4. Usuarios y claves: estan en .streamlit\secrets.toml (comercial / soporte / admin). Se pueden cambiar ahi.
+
+La carpeta datos\ es una copia de las salidas del pipeline a la fecha indicada abajo. No se actualiza sola:
+cuando haya un mes nuevo, pedir la carpeta otra vez. Los archivos de la empresa (TC1, TC2) y los modelos
+entrenados NO vienen en esta copia; la pagina no los necesita.
+
+Corte de los datos: 2026-04
