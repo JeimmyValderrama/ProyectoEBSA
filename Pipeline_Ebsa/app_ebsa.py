@@ -17,7 +17,7 @@ también se puede cambiar en la barra lateral.
 Vistas (barra lateral)
 ----------------------
   Comercial          : Panorama (cifras del corte y mapa de Boyacá), Clientes con riesgo de irse, Grandes caídas de
-                       consumo, Clientes que ya se fueron, Descargas. Lenguaje de negocio.
+                       consumo, Clientes sin consumo (en cero o casi cero), Clientes que ya se fueron, Descargas. Lenguaje de negocio.
   Soporte            : Consultar un cliente (ficha en lenguaje simple: dónde está, qué le pasa, qué revisar),
                        Visitas por ciclo (ruta con dirección y municipio), Registrar resultado de visitas.
   Administrador      : todo lo técnico, que son las secciones de abajo.
@@ -149,6 +149,10 @@ def tabla_con_ficha(df: pd.DataFrame, clave: str, vista_destino: str = "Soporte"
         filas = list(ev.selection.rows)
     except Exception:
         filas = []
+    # La selección queda guardada en la sesión por posición de fila. Si la tabla se recalcula con menos
+    # filas (corrida nueva del pipeline, otro filtro), esa posición puede no existir ya: se descarta y
+    # no se muestra ficha hasta que el usuario haga clic de nuevo (corrección 2026-10-07).
+    filas = [f for f in filas if isinstance(f, int) and 0 <= f < len(df)]
     if filas:
         niu_sel = str(df.iloc[filas[0]]["NIU"]).strip()
         st.divider()
@@ -190,8 +194,27 @@ def prob_pct(p) -> str:
     return "< 0,01 %" if v > 0 else "0 %"
 
 
-PRIORIDAD_SIMPLE = {"GESTIONAR": "Gestionar", "VIGILAR: se espera recuperación": "Vigilar: se espera recuperación",
+PRIORIDAD_SIMPLE = {"GESTIONAR": "Gestionar", "SEGUIMIENTO: caída antigua estable": "Seguimiento: lleva meses en ese nivel",
+                    "VIGILAR: se espera recuperación": "Vigilar: se espera recuperación",
                     "VIGILAR: estacional": "Vigilar: estacional (temporada baja)"}
+ORDEN_PRIORIDAD = {"GESTIONAR": 0, "SEGUIMIENTO: caída antigua estable": 1, "VIGILAR: se espera recuperación": 2, "VIGILAR: estacional": 3}
+TIPO_CAIDA_SIMPLE = {"CAIDA_CONFIRMADA": "Reciente", "CAIDA_SOSTENIDA": "Lleva meses así"}
+
+
+def referencia_caida(df):
+    """Consumo con el que se midió la pérdida (kWh/mes): consumo reciente + pérdida. Es la mayor referencia entre el periodo
+    anterior y el mismo periodo del año pasado; en una caída que lleva meses es siempre la del año pasado. Es el "consumía" coherente con los
+    pesos que se muestran; si faltan columnas, se usa el periodo anterior."""
+    if "perdida_kwh_mes" in df.columns and "consumo_reciente_kwh" in df.columns:
+        ref = pd.to_numeric(df["consumo_reciente_kwh"], errors="coerce").fillna(0) + pd.to_numeric(df["perdida_kwh_mes"], errors="coerce")
+        return ref.fillna(pd.to_numeric(df["consumo_anterior_kwh"], errors="coerce")) if "consumo_anterior_kwh" in df.columns else ref
+    return pd.to_numeric(df["consumo_anterior_kwh"], errors="coerce")
+
+
+def caida_vs_referencia_pct(df):
+    """Caída del consumo reciente frente a la referencia de la pérdida, en % (negativo = cayó)."""
+    ref = referencia_caida(df)
+    return (pd.to_numeric(df["consumo_reciente_kwh"], errors="coerce") - ref) / ref.where(ref > 0) * 100
 
 
 # ----------------------------------------------------------------------------
@@ -445,7 +468,7 @@ if not R.base.exists():
 # Tres vistas, una por público. Comercial y Soporte hablan en lenguaje de negocio;
 # Administrador del modelo conserva todo lo técnico (calidad, seguimiento, cortes, pipeline).
 VISTAS = {
-    "Comercial": ["Panorama", "Caídas de consumo", "Clientes con riesgo de irse", "Clientes que ya se fueron",
+    "Comercial": ["Panorama", "Caídas de consumo", "Clientes sin consumo", "Clientes con riesgo de irse", "Clientes que ya se fueron",
                   "Proyección de consumo (compra de energía)", "Descargas"],
     "Soporte": ["Consultar un cliente", "Caídas de consumo", "Visitas por ciclo", "Registrar resultado de visitas"],
     "Administrador del modelo": [
@@ -781,8 +804,12 @@ def que_revisar(fila) -> str:
     if str(fila.get("prioridad_gestion", "")) == "VIGILAR: estacional":
         return ("Cliente estacional: ya estuvo en cero en temporadas anteriores y volvió, y el modelo prevé que vuelva a consumir. "
                 "No requiere visita; confirmar con el cliente cuándo reanuda actividad.")
+    antigua = str(fila.get("veredicto", "")) == "CAIDA_SOSTENIDA"
     if t == "CAIDA_ACELERANDO":
         partes.append("El consumo viene bajando y el modelo prevé que siga bajando: conviene contactar pronto.")
+    elif antigua and t == "SIN_RECUPERACION_PREVISTA":
+        partes.append("La caída no es de ahora: bajó hace meses frente al año pasado y se quedó en ese nivel. No es urgente; "
+                      "en el próximo contacto, confirmar qué cambió (actividad, equipos, ocupación del predio).")
     elif t == "SIN_RECUPERACION_PREVISTA":
         partes.append("El consumo bajó y se mantiene en ese nivel: preguntar si cambió la actividad, el horario o los equipos.")
     elif t == "RECUPERACION_PREVISTA":
@@ -855,7 +882,7 @@ def ficha_cliente_simple(niu: str) -> None:
     cs_c = cargar(R.cero_sostenido, dtype={"NIU": "string"})
     if cs_c is not None and niu in set(cs_c["NIU"].astype("string").str.strip()):
         cc = cs_c[cs_c["NIU"].astype("string").str.strip() == niu].iloc[0]
-        avisos.append(("warning", f"**Lleva {int(cc.get('meses_en_cero_min', 3))} meses o más sin consumir** (facturaba "
+        avisos.append(("warning", f"**Lleva {int(cc.get('meses_en_cero_min', 3))} meses o más en cero o casi cero** (facturaba "
                                   f"{pesos(cc.get('valor_facturaba_antes_mes', np.nan))}/mes). No está en la lista de caída: "
                                   "ya no hay consumo que revisar; conviene confirmar si está retirado, suspendido o el predio está desocupado."))
     for tipo, txt in avisos:
@@ -864,16 +891,26 @@ def ficha_cliente_simple(niu: str) -> None:
     c1, c2, c3 = st.columns(3)
     if len(o):
         oo = o.iloc[0]
-        var = float(oo.get("variacion_vs_anterior_pct", np.nan))
+        _o1 = o.iloc[[0]]
+        ref_kwh = float(referencia_caida(_o1).iloc[0])
+        var = float(caida_vs_referencia_pct(_o1).iloc[0])
+        es_antigua = str(oo.get("veredicto", "")) == "CAIDA_SOSTENIDA"
         c1.metric("Caída de consumo", f"{var:.0f} %" if pd.notna(var) else "—",
-                  help="Consumo reciente frente al periodo anterior del mismo cliente")
+                  help="Consumo reciente frente a la referencia con la que se midió la pérdida: el mayor entre el periodo anterior "
+                       "y el mismo periodo del año pasado (en una caída que lleva meses, el año pasado).")
         c2.metric("Gravedad", SEVERIDAD_SIMPLE.get(str(oo.get("severidad", "")), str(oo.get("severidad", "—"))))
         c3.metric("Tendencia", TRAYECTORIA_SIMPLE.get(str(oo.get("trayectoria", "")), "—"),
                   help=PRIORIDAD_SIMPLE.get(str(oo.get("prioridad_gestion", "")), ""))
-        if str(oo.get("prioridad_gestion", "")).startswith("VIGILAR"):
+        if str(oo.get("prioridad_gestion", "")).startswith(("VIGILAR", "SEGUIMIENTO")):
             st.caption("Prioridad: **" + PRIORIDAD_SIMPLE.get(str(oo["prioridad_gestion"]), str(oo["prioridad_gestion"])) + "**")
-        st.markdown(f"Consumía **{kwh(oo.get('consumo_anterior_kwh', np.nan))}/mes** y ahora **{kwh(oo.get('consumo_reciente_kwh', np.nan))}/mes**: "
-                    f"son **{pesos(oo.get('valor_riesgo_mes', np.nan))}/mes** menos de facturación. "
+        if es_antigua:
+            _frase = (f"Hace un año consumía **{kwh(ref_kwh)}/mes** y ahora **{kwh(oo.get('consumo_reciente_kwh', np.nan))}/mes**: "
+                      f"son **{pesos_md(oo.get('valor_riesgo_mes', np.nan))}/mes** menos de facturación. Frente a los meses anteriores "
+                      f"(**{kwh(oo.get('consumo_anterior_kwh', np.nan))}/mes**) se mantiene: es una caída que lleva meses, no reciente. ")
+        else:
+            _frase = (f"Consumía **{kwh(ref_kwh)}/mes** y ahora **{kwh(oo.get('consumo_reciente_kwh', np.nan))}/mes**: "
+                      f"son **{pesos_md(oo.get('valor_riesgo_mes', np.nan))}/mes** menos de facturación. ")
+        st.markdown(_frase + ""
                     f"{ESTADO_LISTA_SIMPLE.get(str(oo.get('estado_en_lista', '')), '')}"
                     + (f" (lleva {int(oo.get('meses_consecutivos_en_lista', 1))} mes(es) seguidos en la lista)." if str(oo.get("estado_en_lista", "")) == "PERSISTENTE" else "."))
         st.info("**Qué revisar / qué decirle:** " + que_revisar(oo))
@@ -1053,9 +1090,9 @@ if seccion == "Panorama":
                   help="Ciclo 33, clase no regulada o más de 55.000 kWh/mes: pueden negociar con cualquier comercializador.")
     cs = cargar(R.cero_sostenido, dtype={"NIU": "string"})
     if cs is not None and len(cs):
-        st.caption(f"Aparte, **{fmt_n(len(cs))} clientes llevan 3 meses o más sin consumir** (facturaban "
+        st.caption(f"Aparte, **{fmt_n(len(cs))} clientes llevan 3 meses o más en cero o casi cero** (facturaban "
                    f"{pesos_md(cs['valor_facturaba_antes_mes'].sum())}/mes): no se cuentan como caída porque ya no consumen; "
-                   "están en *Clientes que ya se fueron*.")
+                   "están en la sección *Clientes sin consumo*.")
 
     if operativa is not None:
         st.subheader("Caídas de consumo por zona regional")
@@ -1185,8 +1222,13 @@ elif seccion == "Caídas de consumo":
         st.warning("Todavía no hay lista de caída (paso 11 del pipeline).")
         st.stop()
     st.caption(f"Periodo facturado **{corte_actual}**. Clientes cuyo consumo bajó más de lo normal para clientes parecidos, ordenados por la facturación "
-               "que se está perdiendo cada mes. **Gravedad**: qué tan fuera de lo normal es la caída. **Tendencia**: lo que el modelo espera para el mes que viene. "
+               "que se está perdiendo cada mes. **Consumía** es el nivel con el que se midió la pérdida: el mayor entre el periodo anterior y el mismo periodo del año pasado (en una caída que lleva meses, el del año pasado). **Gravedad**: qué tan fuera de lo normal es la caída. **Tendencia**: lo que el modelo espera para el mes que viene. "
                "Sin autogeneradores ni área común, autoconsumos EBSA, distritos de riego y provisionales.")
+    cs_av = cargar(R.cero_sostenido, dtype={"NIU": "string"})
+    if cs_av is not None and len(cs_av):
+        st.info(f"Aparte hay **{fmt_n(len(cs_av))} clientes en cero o casi cero** desde hace 3 meses o más (facturaban "
+                f"{pesos_md(cs_av['valor_facturaba_antes_mes'].sum())}/mes). No están en esta lista porque ya no hay una caída que "
+                "revisar; se listan en la sección **Clientes sin consumo** para decidir qué hacer con ellos.")
     d = agregar_municipio(limpiar_lista(ger))
     n_lista_caida = len(d)
     col_zona = "zona_regional"
@@ -1206,11 +1248,17 @@ elif seccion == "Caídas de consumo":
     ten = f6.multiselect("Tendencia", list(TRAYECTORIA_SIMPLE), format_func=lambda x: TRAYECTORIA_SIMPLE[x], key="gc_ten", placeholder="Todas")
     if "prioridad_gestion" not in d.columns:
         d["prioridad_gestion"] = np.where(d.get("trayectoria", pd.Series("", index=d.index)).eq("RECUPERACION_PREVISTA"), "VIGILAR: se espera recuperación", "GESTIONAR")
-    pri = st.multiselect("Prioridad", list(PRIORIDAD_SIMPLE), default=["GESTIONAR"], format_func=lambda x: PRIORIDAD_SIMPLE[x], key="gc_pri",
-                         help="Por defecto solo lo que hay que gestionar. Los 'Vigilar' (estacionales o con recuperación prevista) siguen en la lista "
-                              "pero no requieren visita; elígelos aquí para verlos.")
+    g1, g2 = st.columns([3, 2])
+    pri = g1.multiselect("Prioridad", list(PRIORIDAD_SIMPLE), default=["GESTIONAR"], format_func=lambda x: PRIORIDAD_SIMPLE[x], key="gc_pri",
+                         help="Por defecto solo lo que hay que gestionar. 'Seguimiento' son caídas que llevan meses en el mismo nivel (reales, "
+                              "pero no urgentes) y los 'Vigilar' son estacionales o con recuperación prevista: siguen en la lista, elígelos aquí para verlos.")
+    tip = g2.multiselect("Tipo de caída", list(TIPO_CAIDA_SIMPLE), format_func=lambda x: TIPO_CAIDA_SIMPLE[x], key="gc_tip", placeholder="Todos",
+                         help="Reciente: cae frente a su periodo anterior y frente al año pasado. Lleva meses así: frente al periodo anterior "
+                              "se mantiene; la caída es contra el mismo periodo del año pasado.") if "veredicto" in d.columns else []
     if pri:
         d = d[d["prioridad_gestion"].isin(pri)]
+    if tip:
+        d = d[d["veredicto"].isin(tip)]
     if zon:
         d = d[d[col_zona].astype(str).isin(zon)]
     if mun:
@@ -1225,7 +1273,7 @@ elif seccion == "Caídas de consumo":
         d = d[d["trayectoria"].isin(ten)]
     n = st.slider("Cuántos mostrar", 25, 2000, 200, step=25)
     # Orden: primero lo que hay que gestionar, luego vigilar; dentro de cada grupo por facturación perdida
-    d = d.assign(_pri=d["prioridad_gestion"].map({"GESTIONAR": 0, "VIGILAR: se espera recuperación": 1, "VIGILAR: estacional": 2}).fillna(0))
+    d = d.assign(_pri=d["prioridad_gestion"].map(ORDEN_PRIORIDAD).fillna(0))
     d = d.sort_values(["_pri", "valor_riesgo_mes"], ascending=[True, False])
     top = d.head(n)
     c1, c2, c3 = st.columns(3)
@@ -1241,9 +1289,10 @@ elif seccion == "Caídas de consumo":
         "Ciclo": top["zona_nombre"] if "zona_nombre" in top.columns else "—",
         "Clase": top[col_clase],
         "Tamaño": top.get("grupo_consumo", "—"),
-        "Consumía (kWh/mes)": top["consumo_anterior_kwh"].round(0),
+        "Tipo de caída": top["veredicto"].map(TIPO_CAIDA_SIMPLE).fillna("—") if "veredicto" in top.columns else "—",
+        "Consumía (kWh/mes)": referencia_caida(top).round(0),
         "Consume ahora (kWh/mes)": top["consumo_reciente_kwh"].round(0),
-        "Caída": top["variacion_vs_anterior_pct"].round(0).astype("Int64").astype(str) + " %",
+        "Caída": caida_vs_referencia_pct(top).round(0).astype("Int64").astype(str) + " %",
         "Facturación que se pierde ($/mes)": top["valor_riesgo_mes"].round(0),
         "Gravedad": top["severidad"].map(SEVERIDAD_SIMPLE).fillna(top["severidad"]),
         "Tendencia": top["trayectoria"].map(TRAYECTORIA_SIMPLE).fillna("—") if "trayectoria" in top.columns else "—",
@@ -1255,13 +1304,14 @@ elif seccion == "Caídas de consumo":
     tabla_con_ficha(t.reset_index(drop=True), "com_caida", hide_index=True, use_container_width=True, height=560)
 
 
-elif seccion == "Clientes que ya se fueron":
-    st.title("Clientes que ya se fueron o dejaron de consumir")
+elif seccion == "Clientes sin consumo":
+    st.title("Clientes sin consumo (en cero o casi cero)")
     cs = cargar(R.cero_sostenido, dtype={"NIU": "string"})
-    st.subheader("Llevan 3 meses o más sin consumir")
-    st.caption("Consumo en cero durante toda su ventana reciente: retiro, suspensión o predio desocupado. No se cuentan como caída de consumo "
-               "(ya no hay nada que revisar en terreno) pero sí importan a comercial: aquí está lo que facturaban antes de quedar en cero "
-               "(referencia del periodo anterior o del mismo periodo del año pasado, con su tarifa real).")
+    st.caption(f"Periodo facturado **{corte_actual}**. Clientes que llevan toda su ventana reciente (3 meses los de lectura mensual, 6 los "
+               "rurales de lectura trimestral) **en cero o casi cero**: ningún mes pasa de 10 kWh ni del 5 % de lo que consumían. No se cuentan "
+               "como caída de consumo (no hay una caída que una cuadrilla pueda revisar) y no suman a la facturación en riesgo, pero sí importan "
+               "a comercial: aquí está lo que facturaban antes (referencia del periodo anterior o del mismo periodo del año pasado, con su "
+               "tarifa real), para decidir qué hacer con cada uno.")
     if cs is None or len(cs) == 0:
         st.info("No hay clientes en cero sostenido en este corte (o la lista no se ha recalculado con la versión actual).")
     else:
@@ -1274,33 +1324,72 @@ elif seccion == "Clientes que ya se fueron":
                 cs = cs.merge(um, on="NIU", how="left")
             except Exception as ex:
                 st.caption(f"No se pudo calcular el último mes con consumo: {ex}")
-        c1, c2 = st.columns(2)
+        _rec = pd.to_numeric(cs["consumo_reciente_kwh"], errors="coerce").fillna(0) if "consumo_reciente_kwh" in cs.columns else pd.Series(0.0, index=cs.index)
+        cs["_situacion"] = np.where(_rec <= 0, "En cero", "Casi cero")
+        cs["_meses"] = pd.to_numeric(cs["meses_en_cero"] if "meses_en_cero" in cs.columns else cs["meses_en_cero_min"], errors="coerce")
+        # sin ningún mes con consumo en la serie: lleva así toda la historia disponible
+        cs["_tramo_meses"] = np.select([cs["_meses"].isna(), cs["_meses"] <= 6, cs["_meses"] <= 12],
+                                       ["Más de 12 meses", "Hasta 6 meses", "7 a 12 meses"], default="Más de 12 meses")
+        cs["_que_hacer"] = cs["_tramo_meses"].map({
+            "Hasta 6 meses": "Confirmar: suspensión o predio desocupado que puede volver",
+            "7 a 12 meses": "Verificar el estado del servicio y si procede la reconexión",
+            "Más de 12 meses": "Retiro de hecho: depurar catastro o gestionar reconexión",
+        })
+        _ref = pd.to_numeric(cs["consumo_referencia_kwh"] if "consumo_referencia_kwh" in cs.columns else cs["consumo_anterior_kwh"], errors="coerce")
+        cs["_tamano"] = np.select([_ref >= 5000, _ref >= 500], ["Grande", "Mediano"], default="Pequeño")
+        c1, c2, c3, c4 = st.columns(4)
         c1.metric("Clientes sin consumo", f"{fmt_n(len(cs))}")
-        c2.metric("Facturaban antes", f"{pesos(cs['valor_facturaba_antes_mes'].sum())}/mes")
-        if "ultimo_mes_con_consumo" in cs.columns:
-            st.caption("**Último mes con consumo**: el último mes en que el cliente registró consumo mayor que cero; **Meses en cero**: los meses "
-                       "transcurridos desde entonces hasta el último dato que tiene. Un cliente que lleva muchos meses en cero es un retiro de hecho; "
-                       "uno de pocos meses puede ser una suspensión o un predio desocupado que vuelva.")
-        f1, f2 = st.columns(2)
+        c2.metric("En cero", f"{fmt_n(int((cs['_situacion'] == 'En cero').sum()))}")
+        c3.metric("Casi cero", f"{fmt_n(int((cs['_situacion'] == 'Casi cero').sum()))}",
+                  help="Consumen algo, pero ningún mes de la ventana pasa de 10 kWh ni del 5 % de lo que consumían.")
+        c4.metric("Facturaban antes", f"{pesos(cs['valor_facturaba_antes_mes'].sum())}/mes")
+        with st.expander("Cuántos hay según el tiempo que llevan sin consumo", expanded=True):
+            _orden_t = ["Hasta 6 meses", "7 a 12 meses", "Más de 12 meses"]
+            _res = cs.groupby("_tramo_meses").agg(**{"Clientes": ("NIU", "size"), "Facturaban antes ($/mes)": ("valor_facturaba_antes_mes", "sum")}).reindex(_orden_t).fillna(0)
+            _res.insert(0, "Qué hacer (sugerido)", [cs.loc[cs["_tramo_meses"] == x, "_que_hacer"].iloc[0] if (cs["_tramo_meses"] == x).any() else "—" for x in _orden_t])
+            _res["Clientes"] = _res["Clientes"].astype(int)
+            tabla(_res.reset_index().rename(columns={"_tramo_meses": "Tiempo sin consumo"}), hide_index=True, use_container_width=True)
+            st.caption("**Meses sin consumo**: los transcurridos desde el último mes en que el cliente consumió por encima de su umbral de casi cero. "
+                       "**Qué hacer** es una sugerencia por ese tiempo; el proyecto es académico y no hay gestión real de clientes.")
+        f1, f2, f3, f4, f5 = st.columns(5)
         zon_cs = filtro_zona_regional(f1, cs, "cs_zona")
         mun_cs = filtro_municipio(f2, cs, "cs_mun")
+        sit_cs = f3.multiselect("Situación", ["En cero", "Casi cero"], key="cs_sit", placeholder="Todas")
+        tie_cs = f4.multiselect("Tiempo sin consumo", ["Hasta 6 meses", "7 a 12 meses", "Más de 12 meses"], key="cs_tie", placeholder="Todos")
+        tam_cs = f5.multiselect("Tamaño (por lo que consumía)", [x for x in ["Grande", "Mediano", "Pequeño"] if x in set(cs["_tamano"])], key="cs_tam", placeholder="Todos")
         dcs = cs
         if zon_cs:
             dcs = dcs[dcs["zona_regional"].astype(str).isin(zon_cs)]
         if mun_cs:
             dcs = dcs[dcs["municipio"].astype(str).isin(mun_cs)]
+        if sit_cs:
+            dcs = dcs[dcs["_situacion"].isin(sit_cs)]
+        if tie_cs:
+            dcs = dcs[dcs["_tramo_meses"].isin(tie_cs)]
+        if tam_cs:
+            dcs = dcs[dcs["_tamano"].isin(tam_cs)]
+        dcs = dcs.sort_values("valor_facturaba_antes_mes", ascending=False, na_position="last")
         tcs = pd.DataFrame({
             "NIU": dcs["NIU"], "Municipio": dcs["municipio"] if "municipio" in dcs.columns else "—",
             "Zona regional": dcs["zona_regional"], "Clase": nombre_clase(dcs["clase_servicio"]) if "clase_servicio" in dcs.columns else "—",
-            "Último mes con consumo": dcs["ultimo_mes_con_consumo"].fillna("sin consumo en la serie") if "ultimo_mes_con_consumo" in dcs.columns else "—",
-            "Meses en cero": dcs["meses_en_cero"] if "meses_en_cero" in dcs.columns else dcs["meses_en_cero_min"],
+            "Tamaño": dcs["_tamano"],
+            "Situación": dcs["_situacion"],
             "Consumía antes (kWh/mes)": (dcs["consumo_referencia_kwh"] if "consumo_referencia_kwh" in dcs.columns else dcs["consumo_anterior_kwh"]).round(0),
+            "Consume ahora (kWh/mes)": pd.to_numeric(dcs["consumo_reciente_kwh"], errors="coerce").round(1) if "consumo_reciente_kwh" in dcs.columns else 0,
             "Facturaba antes ($/mes)": dcs["valor_facturaba_antes_mes"].round(0),
+            "Último mes con consumo": dcs["ultimo_mes_con_consumo"].fillna("sin consumo en la serie") if "ultimo_mes_con_consumo" in dcs.columns else "—",
+            "Meses sin consumo": dcs["_meses"].astype("Int64"),
+            "Qué hacer (sugerido)": dcs["_que_hacer"],
         })
         linea_conteo(len(tcs), len(dcs), len(cs), None, "clientes sin consumo", "en total")
         st.download_button("Descargar clientes sin consumo (CSV)", csv_es(tcs),
-                           file_name=f"clientes_cero_sostenido_{corte_actual or ''}.csv", mime="text/csv")
-        tabla_con_ficha(tcs.reset_index(drop=True), "com_cero", hide_index=True, use_container_width=True, height=360)
+                           file_name=f"clientes_sin_consumo_{corte_actual or ''}.csv", mime="text/csv")
+        tabla_con_ficha(tcs.reset_index(drop=True), "com_cero", hide_index=True, use_container_width=True, height=520)
+
+
+elif seccion == "Clientes que ya se fueron":
+    st.title("Clientes que ya están con otro comercializador")
+    st.caption("Los clientes en cero o casi cero (que siguen conectados pero ya no consumen) están en la sección *Clientes sin consumo*.")
 
     st.subheader("Ya están con otro comercializador")
     ya = cargar(R.fuga_ya_fuera, dtype={"NIU": "string"})
@@ -1584,7 +1673,7 @@ elif seccion == "Visitas por ciclo":
     lec = f5.multiselect("Tipo de lectura", sorted(d["tipo_lectura_nombre"].dropna().astype(str).unique()), key="vis_lec", placeholder="Todas",
                          help="REAL: leída del medidor. ESTIMADA: la empresa estimó el consumo; una caída con lectura estimada puede no ser real.") if "tipo_lectura_nombre" in d.columns else []
     pri = st.multiselect("Prioridad", list(PRIORIDAD_SIMPLE), default=["GESTIONAR"], format_func=lambda x: PRIORIDAD_SIMPLE[x], key="vis_pri",
-                         help="Por defecto solo lo que hay que gestionar; los 'Vigilar' son estacionales o con recuperación prevista y van al final del ciclo.") if "prioridad_gestion" in d.columns else []
+                         help="Por defecto solo lo que hay que gestionar; 'Seguimiento' son caídas que llevan meses en el mismo nivel y los 'Vigilar' son estacionales o con recuperación prevista: van después en el ciclo.") if "prioridad_gestion" in d.columns else []
     if pri:
         d = d[d["prioridad_gestion"].isin(pri)]
     if mun:
@@ -1610,8 +1699,9 @@ elif seccion == "Visitas por ciclo":
         "Dirección": d["direccion"] if "direccion" in d.columns else "—",
         "Clase": d.get("clase_servicio_nombre", d.get("clase_servicio", "—")),
         "Lectura": d["tipo_lectura_nombre"] if "tipo_lectura_nombre" in d.columns else "—",
-        "Consumía (kWh/mes)": d["consumo_anterior_kwh"].round(0), "Consume ahora (kWh/mes)": d["consumo_reciente_kwh"].round(0),
-        "Caída": d["variacion_vs_anterior_pct"].round(0).astype("Int64").astype(str) + " %",
+        "Tipo de caída": d["veredicto"].map(TIPO_CAIDA_SIMPLE).fillna("—") if "veredicto" in d.columns else "—",
+        "Consumía (kWh/mes)": referencia_caida(d).round(0), "Consume ahora (kWh/mes)": d["consumo_reciente_kwh"].round(0),
+        "Caída": caida_vs_referencia_pct(d).round(0).astype("Int64").astype(str) + " %",
         "Facturación que se pierde ($/mes)": d["valor_riesgo_mes"].round(0),
         "Gravedad": d["severidad"].map(SEVERIDAD_SIMPLE).fillna(d["severidad"]),
         "Tendencia": d["trayectoria"].map(TRAYECTORIA_SIMPLE).fillna("—") if "trayectoria" in d.columns else "—",
@@ -1645,7 +1735,7 @@ elif seccion == "Resumen":
         st.stop()
     cs_r = cargar(R.cero_sostenido, dtype={"NIU": "string"})
     if cs_r is not None and len(cs_r):
-        st.caption(f"Fuera de la lista: {fmt_n(len(cs_r))} clientes en cero sostenido (3+ meses sin consumo; `clientes_cero_sostenido.csv`), "
+        st.caption(f"Fuera de la lista: {fmt_n(len(cs_r))} clientes en cero sostenido (3+ meses en cero o casi cero; `clientes_cero_sostenido.csv`), "
                    "autogeneradores y las clases AC, AU, RI y PR (`clientes_excluidos_de_gestion.csv`).")
 
     g = operativa
@@ -1835,7 +1925,7 @@ elif seccion == "Ranking gerencial":
         d = d[d["municipio"].astype(str).isin(mun)]
     total = d["valor_riesgo_mes"].sum()
     if "prioridad_gestion" in d.columns:
-        d = d.assign(_pri=d["prioridad_gestion"].map({"GESTIONAR": 0, "VIGILAR: se espera recuperación": 1, "VIGILAR: estacional": 2}).fillna(0))
+        d = d.assign(_pri=d["prioridad_gestion"].map(ORDEN_PRIORIDAD).fillna(0))
         d = d.sort_values(["_pri", "valor_riesgo_mes"], ascending=[True, False])
     top = d.head(n)
     linea_conteo(len(top), len(d), len(ger), n_evaluados_caida(), "clientes de la lista", "en toda la lista de caída", "clientes evaluados por el detector")
