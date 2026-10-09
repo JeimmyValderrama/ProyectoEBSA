@@ -290,16 +290,23 @@ def proyectar_zona(y: pd.Series, meses: int, umbral: float) -> tuple[pd.DataFram
     return proy, info
 
 
-def confiabilidad(anio_horizonte: int, info: dict) -> str:
-    """Etiqueta por año de horizonte según el error medido en el backtest."""
+def confiabilidad(anio_horizonte: int, info: dict, escenario: str = "BASE") -> str:
+    """Etiqueta por año de horizonte según el error medido en el backtest DEL MODELO DE ESE ESCENARIO.
+
+    Corrección 2026-10-09 (revisión, ronda 2): antes se usaba siempre el error del modelo base, así que el
+    escenario alternativo heredaba la etiqueta del base (el total a dos años salía CONFIABLE con 10,2 % de
+    error del modelo alternativo, con un umbral de 5 %)."""
     u = info["umbral_pct"]
     if anio_horizonte <= 0:
         return "REAL"
+    alt = escenario != "BASE" and bool(info.get("tendencia"))
+    e1 = info["tendencia"]["wape_anio1_pct"] if alt else info["wape_anio1_pct"]
+    e2 = info["tendencia"]["wape_anio2_pct"] if alt else info["wape_anio2_pct"]
     if anio_horizonte == 1:
-        e = info["wape_anio1_pct"]
+        e = e1
         return "CONFIABLE" if np.isfinite(e) and e <= u else "ORIENTATIVO"
     if anio_horizonte == 2:
-        e = info["wape_anio2_pct"]
+        e = e2
         if not np.isfinite(e) or info["puntos_anio2"] < 12:
             return "NO VERIFICABLE"
         return "CONFIABLE" if e <= u else "ORIENTATIVO"
@@ -389,7 +396,7 @@ def main() -> None:
                   "sup80_gwh": g["real_gwh"].fillna(0).sum() + g["sup80_gwh"].fillna(0).sum(),
                   "inf95_gwh": g["real_gwh"].fillna(0).sum() + g["inf95_gwh"].fillna(0).sum(),
                   "sup95_gwh": g["real_gwh"].fillna(0).sum() + g["sup95_gwh"].fillna(0).sum(),
-                  "anio_horizonte": hor, "confiabilidad": confiabilidad(hor, info) if n_proy else "REAL",
+                  "anio_horizonte": hor, "confiabilidad": confiabilidad(hor, info, esc) if n_proy else "REAL",
                   "error_backtest_pct": ((info["wape_anio1_pct"] if esc == "BASE" else info["tendencia"]["wape_anio1_pct"]) if hor == 1
                                          else ((info["wape_anio2_pct"] if esc == "BASE" else info["tendencia"]["wape_anio2_pct"]) if hor == 2 else np.nan)),
                   "modelo": info["modelo"] if esc == "BASE" else info["tendencia"]["modelo"],

@@ -27,7 +27,7 @@ Si un paso falla, el pipeline se detiene, dice por qué y con qué comando reanu
 
 | Comando | Qué hace | Cuándo |
 |---|---|---|
-| `python pipeline_mensual.py --modo reentrenar` | Lo mismo que la corrida mensual, pero además reentrena el pronóstico (backtest + entrenamiento, ~1 hora extra), vuelve a comparar algoritmos de agrupamiento, recalcula los criterios de caída y reentrena el riesgo de fuga con Optuna. Sobreescribe los `.joblib`. | **Una vez al año** (tope `MESES_MAX = 12` en `estado_modelos.py`), para que el modelo incorpore un ciclo estacional completo más; antes de eso solo si `estado_modelos.py` dice REENTRENAR por el seguimiento (dos cortes seguidos con más de la mitad de las celdas perfil × horizonte con WAPE en vivo por encima del backtest), o ante cambios estructurales (revisión tarifaria grande, cambio en la lectura rural, ciclos nuevos, llegada de archivos de años anteriores). Evidencia: en la simulación de 11 cortes el modelo de 7 meses pronosticaba igual que el recién entrenado y reentrenar movió 0,1 puntos de WAPE (Anexo E.3 del informe). Los criterios de caída se recalculan cuando `estado_modelos.py` avise deriva de umbrales > 10 puntos (es barato: `--solo 10,11,15`). |
+| `python pipeline_mensual.py --modo reentrenar` | Lo mismo que la corrida mensual, pero además reentrena el pronóstico (backtest + entrenamiento, ~1 hora extra), vuelve a comparar algoritmos de agrupamiento, recalcula los criterios de caída y reentrena el riesgo de fuga (parámetros fijos; Optuna solo como análisis de sensibilidad). Sobreescribe los `.joblib`. | **Una vez al año** (tope `MESES_MAX = 12` en `estado_modelos.py`), para que el modelo incorpore un ciclo estacional completo más; antes de eso solo si `estado_modelos.py` dice REENTRENAR por el seguimiento (dos cortes seguidos con más de la mitad de las celdas perfil × horizonte con WAPE en vivo por encima del backtest), o ante cambios estructurales (revisión tarifaria grande, cambio en la lectura rural, ciclos nuevos, llegada de archivos de años anteriores). Evidencia: en la simulación de 11 cortes el modelo de 7 meses pronosticaba igual que el recién entrenado y reentrenar movió 0,1 puntos de WAPE (Anexo E.3 del informe). Los criterios de caída se recalculan cuando `estado_modelos.py` avise deriva de umbrales > 10 puntos (es barato: `--solo 10,11,15`). |
 | `python pipeline_mensual.py --modo reentrenar --solo 14,15` | Reentrena solo el riesgo de fuga (minutos) y rehace los exportes. | Cada vez que la empresa entregue una versión nueva del archivo de otros comercializadores con más casos, o cuando `10_riesgo_fuga\seguimiento_riesgo_fuga.csv` muestre que los señalados ALTO no se van más que la tasa base. |
 
 ---
@@ -64,8 +64,10 @@ Pasos disponibles: 1 Exploración (histórico), 2 Reconstrucción rural, 3 Prepr
 
 | Comando | Qué muestra | Cuándo |
 |---|---|---|
-| `python verificar_corrida.py` | Consistencia de la última corrida (histórico, cortes, pronóstico, listas, fuga, exportes, registro). | Después de cada corrida. |
+| `python verificar_corrida.py` | Consistencia de la última corrida (histórico, cortes, pronóstico, listas, fuga, exportes, registro). Termina con código de salida 1 si hay errores. | Después de cada corrida. |
 | `python estado_modelos.py` | Un veredicto por modelo (pronóstico, agrupamiento, caída, riesgo de fuga): MANTENER / REVISAR / REENTRENAR, con el motivo y el comando exacto si toca reentrenar. Lee la antigüedad de cada modelo, el seguimiento en vivo y la deriva de criterios. | Después de la corrida mensual, para decidir si el mes que viene se corre en modo reentrenar. |
+| `python generar_ejemplo_retroalimentacion.py` | Ejemplo ilustrativo, con **resultados simulados**, de cómo se vería la página *Resultados de las visitas* si se registraran visitas. Escribe en `07_gestion_caida\retroalimentacion\ejemplo_simulado\`; la página lo muestra con un aviso mientras no haya visitas reales. Para quitarlo se borra esa carpeta. |
+| `python evaluar_ingenuos_backtest.py` | El backtest del pronóstico frente a pronósticos ingenuos (repetir el último mes, media de 3 y de 12 meses, mismo mes del año anterior), separado en urbano y rural, y el error por cliente. Deja `comparacion_ingenuos_backtest.csv` y `error_por_cliente_backtest.csv` en `04_pronostico\modelo_final`. Solo lee; tarda menos de un minuto. | Después de cada reentrenamiento del pronóstico, y antes de citar una cifra de precisión. |
 | `python comparar_modelos.py` | Deterioro y mejora de los modelos: WAPE en vivo por versión, curva de envejecimiento y cabeza a cabeza viejo vs nuevo (sección 4b). | Después de una simulación, o cada trimestre con los meses reales acumulados. |
 | `python diagnostico_glosario.py` | Códigos del histórico (ciclo, clase, medidor, lectura, factura, estrato) que no tienen nombre en el glosario, cuántos clientes los tienen, y meses que llegaron sin esas columnas. | Cuando la empresa entregue glosario nuevo, o si la página muestra "sin nombre en glosario" con códigos que no conocías. |
 | `python diagnostico_cruce_fuga.py` | Cruce del archivo de otros comercializadores contra la historia TC2: cuántos existen, cuándo salieron, cómo se ve la salida. | Cuando llegue una versión nueva del archivo de otros comercializadores, para ver cuántos ejemplos nuevos aporta. |
@@ -146,7 +148,40 @@ Agrega la serie consolidada por zona regional, ajusta Holt-Winters / SARIMA, mid
 ```
 python empaquetar_app.py
 ```
-Deja `C:\Users\Home\Documents\EBSA_app_para_compartir\` con la app, los usuarios, `INICIAR_APP.bat`, `LEEME.txt` y una carpeta `datos\` con solo lo que la página lee (~600 MB; `--sin-exportes` la deja en ~250 MB sin la sección Descargas). Se comprime y se envía. En el otro PC: `pip install -r requirements_app.txt` y doble clic en `INICIAR_APP.bat`; la página encuentra `datos\` sola. Cuando haya un mes nuevo se vuelve a empaquetar y se reenvía (la copia no se actualiza sola).
+Deja `C:\Users\Home\Documents\EBSA_app_para_compartir\` con **las dos páginas** (original e interfaz nueva), `INICIAR_APP.bat`, `INICIAR_APP_V2.bat`, `LEEME.txt`, `secrets.toml.ejemplo` y una carpeta `datos\` con solo lo que las páginas leen (~680 MB; `--sin-exportes` la deja en ~320 MB sin la sección Descargas). Se comprime y se envía. En el otro PC: `pip install -r requirements_app.txt`, crear el archivo de usuarios como dice `LEEME.txt` y doble clic en `INICIAR_APP.bat` o `INICIAR_APP_V2.bat`; las páginas encuentran `datos\` solas. Cuando haya un mes nuevo se vuelve a empaquetar y se reenvía (la copia no se actualiza sola).
+
+| Comando | Para qué |
+|---|---|
+| `python empaquetar_app.py` | Paquete con las dos páginas, **sin claves** (lleva `secrets.toml.ejemplo`). |
+| `python empaquetar_app.py --sin-exportes` | Igual, sin `11_exportes_negocio` (la sección Descargas queda vacía). |
+| `python empaquetar_app.py --destino D:\EBSA_app` | Otra carpeta de destino. Si existe, se reemplaza. |
+| `python empaquetar_app.py --incluir-claves` | Copia también `.streamlit\secrets.toml` de esta máquina. Solo si quien recibe debe tener esas mismas claves. |
+
+El paquete nunca lleva modelos `.joblib`, notebooks ni archivos de la empresa, y al terminar el programa lo revisa y lo dice. La carpeta `datos\` sí lleva información de clientes (NIU, dirección, consumo): se comparte solo con el equipo.
+
+## 4f. Las dos versiones de la página
+
+Desde `C:\Users\Home\Documents\GitHub\ProyectoEBSA\Pipeline_Ebsa`:
+
+| Qué | Comando | Qué hace |
+|---|---|---|
+| Página original | `python -m streamlit run app_ebsa.py` | Abre la página de siempre en http://localhost:8501. |
+| Interfaz nueva (V2) | `python -m streamlit run app_ebsa_v2.py` | Abre la misma información con la interfaz nueva. Necesita `componentes_v2.py` y `recursos_v2\` en la misma carpeta. |
+| Las dos a la vez | `python -m streamlit run app_ebsa.py --server.port 8501` y, en otra consola, `python -m streamlit run app_ebsa_v2.py --server.port 8502` | Cada una en su puerto, para compararlas. |
+| Ver la versión de Streamlit | `python -m streamlit version` | La V2 necesita 1.40 o superior; la original, 1.35. |
+| Apagar una página | Ctrl+C en su consola | — |
+
+Las dos leen la misma carpeta de datos y el mismo `.streamlit\secrets.toml`, y ninguna escribe en los datos. Después de correr el pipeline no hay que reiniciarlas: leen los archivos nuevos solas. Después de cambiar un archivo `.py` de la V2 sí hay que apagarla y volver a abrirla.
+
+| Si pasa esto | Hacer esto |
+|---|---|
+| "Falta el archivo de usuarios" | `copy secrets.toml.ejemplo .streamlit\secrets.toml` y cambiar las claves (sección 5). |
+| "Usuario o clave incorrectos" con la clave bien escrita | La clave del archivo sigue en `CAMBIAR`: mientras diga eso, ese usuario no entra. |
+| `No module named 'componentes_v2'` | Falta `componentes_v2.py` junto a `app_ebsa_v2.py`, o la página se lanzó desde otra carpeta. |
+| La V2 sale sin estilos o con el mapa de círculos | Falta la carpeta `recursos_v2\`. |
+| `Port 8501 is already in use` | Hay otra página abierta en ese puerto: cerrarla o usar `--server.port 8502`. |
+| "No existe la carpeta de datos" | Revisar `EBSA_DATOS` o, como `admin`, la *Carpeta de datos* (en la V2 está en *Datos y sesión*, al final del menú). |
+| Una sección dice que falta un archivo | Falta esa corrida del pipeline, no la página (sección 1). |
 
 ## 6b. Decisiones de negocio que ya están en el código (no hay que configurarlas)
 
@@ -155,6 +190,7 @@ Deja `C:\Users\Home\Documents\EBSA_app_para_compartir\` con la app, los usuarios
 - **Clases sin gestión (AC área común, AU autoconsumos EBSA, RI distritos de riego, PR provisionales)**: fuera de la lista de caída y del riesgo de fuga; siguen en la serie y el pronóstico. Los retirados quedan en `07_gestion_caida\clientes_excluidos_de_gestion.csv`.
 - **Cero sostenido (3+ meses en cero o casi cero)**: ningún mes de la ventana reciente por encima del mayor entre 10 kWh y el 5 % de lo que el cliente consumía (ajuste del 2026-10-07; antes exigía 0 exacto). Fuera de la lista de caída; quedan en `07_gestion_caida\clientes_cero_sostenido.csv` con lo que facturaban antes y la página los muestra en la sección *Clientes sin consumo* de la vista Comercial. El riesgo de fuga sigue usando el cero exacto para su etiqueta de salida. Si se cambia esta regla en el notebook 11 basta con `python pipeline_mensual.py --modo aplicar --solo 11,15` (1–2 min) y `python verificar_corrida.py`.
 - **Estacionales**: ya estuvieron en cero y volvieron antes de la caída actual, y el pronóstico prevé recuperación (vuelve al menos a la mitad del nivel previo y supera 10 kWh) → `prioridad_gestion = VIGILAR: estacional`, al final del ciclo. **Fuga**: el top % de la lista solo aplica con probabilidad ≥ tasa base.
+- **Caídas antiguas**: todas las que solo caen frente al año pasado (`CAIDA_SOSTENIDA`) quedan con `prioridad_gestion = SEGUIMIENTO: caída antigua` y en la página su gravedad se muestra como "Antigua", no como "Grave", después de `GESTIONAR` en cada ciclo; la página muestra por defecto solo `GESTIONAR` y permite elegirlas en el filtro *Prioridad*.
 - **Zona regional**: columna `zona_regional` en todas las listas (ciclo urbano + rural + seccionales de una misma dirección). La página filtra y resume por ella.
 - **Etiqueta de ciclo de la lista operativa**: es el ciclo actual del cliente (la ruta de hoy), para que coincida con la zona del glosario que sale de los atributos del último mes.
 
@@ -165,4 +201,6 @@ Deja `C:\Users\Home\Documents\EBSA_app_para_compartir\` con la app, los usuarios
 - No editar ni renombrar los archivos de la empresa; si un mes llega corregido, se copia con el mismo nombre de mes y el paso 1 lo reemplaza y avisa.
 - No borrar `01_historico_procesado\resumen_por_archivo` sin motivo: obliga a releer todos los XLSX de `00_formato_TC2`.
 - No correr dos pipelines a la vez sobre la misma carpeta de datos.
+- No borrar ni reemplazar una página por la otra: `app_ebsa.py` y `app_ebsa_v2.py` se mantienen las dos. Un cambio de cálculo o de regla se hace en ambas.
+- No subir a Git ni enviar por correo `.streamlit\secrets.toml`; no publicar en internet la carpeta `datos\` ni capturas con NIU o direcciones.
 - No cambiar `EBSA_MODO` a `reentrenar` por costumbre: en aplicar los segmentos y los criterios se mantienen estables mes a mes, que es lo que permite comparar.

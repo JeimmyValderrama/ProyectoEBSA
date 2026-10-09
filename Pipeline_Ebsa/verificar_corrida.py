@@ -195,6 +195,15 @@ if existe(ruta_op, "la lista operativa"):
         n_cero = int(((pd.to_numeric(g["consumo_reciente_kwh"], errors="coerce").fillna(0) <= 0)
                       & (pd.to_numeric(g["meses_ventana"], errors="coerce").fillna(0) >= 3)).sum())
         linea("OK" if n_cero == 0 else "ERROR", f"clientes en cero sostenido (3+ meses en 0) dentro de la lista de caída: {n_cero:,} (deben ser 0; van en clientes_cero_sostenido.csv)")
+    # casi cero sostenido (regla del 2026-10-07): ningún cliente de clientes_cero_sostenido.csv puede estar en la lista
+    _cs = BASE / "07_gestion_caida" / "clientes_cero_sostenido.csv"
+    if _cs.exists():
+        _nius_cs = set(pd.read_csv(_cs, usecols=["NIU"], dtype={"NIU": "string"})["NIU"].str.strip())
+        _en_ambas = len(_nius_cs & set(g["NIU"].astype("string").str.strip()))
+        linea("OK" if _en_ambas == 0 else "ERROR",
+              f"clientes en cero o casi cero sostenido que siguen en la lista de caída: {_en_ambas:,} (deben ser 0)")
+    _dup = int(g["NIU"].astype("string").str.strip().duplicated().sum())
+    linea("OK" if _dup == 0 else "ERROR", f"clientes repetidos en la lista operativa: {_dup:,} (deben ser 0)")
     linea("OK" if "zona_regional" in g.columns else "AVISO", "columna zona_regional: " + ("presente" if "zona_regional" in g.columns else "FALTA (corre el paso 11 con la versión actual)"))
     copia = BASE / "07_gestion_caida" / "historial" / f"gestion_caida_operativa_corte_{CORTES.get('URBANO', pd.Timestamp('1900-01-01')):%Y-%m}.csv"
     linea("OK" if copia.exists() else "ERROR", f"copia versionada del corte: {copia.name}")
@@ -248,6 +257,21 @@ else:
     if sg.exists() and len(pd.read_csv(sg)):
         t = pd.read_csv(sg)
         linea("OK", f"seguimiento del pronóstico evaluado para cortes {sorted(t['fecha_corte'].astype(str).unique())}")
+        # Un mismo pronóstico no puede contarse dos veces: en cada corte y horizonte, los pares evaluados de una
+        # zona no pueden superar el número de clientes pronosticados de esa zona (corrección 2026-10-08).
+        _sz = BASE / "08_seguimiento" / "seguimiento_pronostico_por_zona.csv"
+        _p6 = BASE / "04_pronostico" / "modelo_final" / "predicciones_segmentadas_optimizadas_6_meses.parquet"
+        if _sz.exists() and _p6.exists():
+            try:
+                _z = pd.read_csv(_sz)
+                _pz = pd.read_parquet(_p6, columns=["zona"], engine="pyarrow")["zona"].astype(str).str.upper().value_counts()
+                _exceso = [f"{r.zona} corte {r.fecha_corte} h{r.horizonte}: {int(r.n):,} > {int(_pz.get(str(r.zona).upper(), 0) * 1.05):,}"
+                           for r in _z.itertuples() if r.n > _pz.get(str(r.zona).upper(), 0) * 1.05]
+                linea("OK" if not _exceso else "ERROR",
+                      "seguimiento sin pronósticos repetidos" if not _exceso
+                      else "seguimiento con más pares que clientes (pronósticos contados dos veces): " + "; ".join(_exceso[:3]))
+            except Exception as _e:
+                linea("AVISO", f"no se pudo comprobar la unicidad del seguimiento: {_e}")
     else:
         linea("AVISO", f"hay cortes guardados ({', '.join(cortes_prev)}) pero el seguimiento aún no tiene meses consolidados posteriores")
     sf = BASE / "10_riesgo_fuga" / "seguimiento_riesgo_fuga.csv"
@@ -279,3 +303,5 @@ elif resultado["AVISO"]:
     print("Sin errores. Los avisos son cosas para mirar, no para detenerse.")
 else:
     print("Todo consistente.")
+# Código de salida distinto de cero cuando hay errores, para que un script que lo llame pueda reaccionar
+_sys.exit(1 if resultado["ERROR"] else 0)

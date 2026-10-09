@@ -1,0 +1,8 @@
+Tipografías usadas por app_ebsa_v2.py (se cargan desde esta carpeta, sin internet):
+
+- Barlow Semi Condensed (SemiBold 600) - Copyright 2017 The Barlow Project Authors (https://github.com/jpt/barlow)
+- Source Sans 3 (Regular 400, SemiBold 600) - proyecto Source Sans de Adobe (https://github.com/adobe-fonts/source-sans)
+
+Ambas se distribuyen con la licencia SIL Open Font License, versión 1.1 (http://scripts.sil.org/OFL),
+que permite usarlas, copiarlas y redistribuirlas con este aviso. Los archivos .woff2 vienen del
+proyecto Fontsource (subconjunto "latin").

@@ -85,6 +85,11 @@ if ruta.exists():
     if seg.exists() and len(pd.read_csv(seg)):
         s = pd.read_csv(seg)
         s["fecha_corte"] = s["fecha_corte"].astype(str)
+        # P4 (sin historia suficiente) no tiene modelo: su pronóstico es la línea base y su "backtest" es un
+        # error de 74-142 %, así que en vivo siempre sale "mejor" y diluía la señal de los perfiles que sí
+        # tienen modelo (corrección 2026-10-08).
+        if "perfil" in s.columns:
+            s = s[~s["perfil"].astype(str).str.startswith("P4")]
         por_corte = (s.groupby("fecha_corte")
                      .agg(horizontes=("horizonte", "nunique"),
                           malos=("dif_vs_backtest_pp", lambda x: int((x > 5).sum())),
@@ -232,8 +237,13 @@ if ruta.exists():
                 print(f"  Seguimiento con ventana completa: ALTO se fue el {pa:.1f}% vs tasa base {pb:.1f}%")
                 if pb > 0 and pa < 2 * pb:
                     razones.append(f"los señalados ALTO no se van claramente más que la tasa base ({pa:.1f}% vs {pb:.1f}%)")
+        elif "observable" in s.columns and s["observable"].astype(str).str.startswith("NO").all():
+            # el archivo de otros comercializadores termina antes de las listas guardadas: no hay salidas que observar
+            hasta = str(s["salidas_conocidas_hasta"].iloc[0]) if "salidas_conocidas_hasta" in s.columns else "?"
+            revisar.append(f"el seguimiento no puede observar salidas: el archivo de otros comercializadores llega hasta {hasta} "
+                           f"y las listas guardadas son posteriores; pedir a la empresa una versión actualizada")
         else:
-            print("  Seguimiento: hay cortes anteriores pero ninguno con la ventana de 6 meses completa todavía.")
+            print("  Seguimiento: hay cortes anteriores pero ninguno con la ventana de 6 meses completa y observable todavía.")
     else:
         print("  Seguimiento: todavía sin cortes anteriores.")
     if razones:
