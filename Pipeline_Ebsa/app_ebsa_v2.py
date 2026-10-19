@@ -119,6 +119,86 @@ def kwh(x) -> str:
     return "—" if pd.isna(x) else fmt_n(x) + " kWh"
 
 
+def energia(x) -> str:
+    """Energía con la unidad que corresponde a la escala: 7.291 kWh · 2.812,6 MWh · 2,74 GWh. Solo cambia la unidad, no el dato."""
+    if x is None or pd.isna(x):
+        return "—"
+    v = float(x)
+    if abs(v) < 1e5:
+        return fmt_n(v) + " kWh"
+    if abs(v) < 1e6:
+        return fmt_n(v / 1e3, 1) + " MWh"
+    return fmt_n(v / 1e6, 2) + " GWh"
+
+
+def energia_corta(x) -> str:
+    """Como energia(), pero sin decimales en MWh (para bandas y barras donde el espacio es poco): 882 MWh · 1,51 GWh."""
+    if x is None or pd.isna(x):
+        return "—"
+    v = float(x)
+    if abs(v) < 1e5:
+        return fmt_n(v) + " kWh"
+    if abs(v) < 1e6:
+        return fmt_n(v / 1e3) + " MWh"
+    return fmt_n(v / 1e6, 2) + " GWh"
+
+
+def energia_md(x) -> str:
+    return energia(x)
+
+
+# ----------------------------------------------------------------------------
+# Medida principal: consumo (kWh) o facturación ($). (Modificaciones sugeridas, octubre 2026: EBSA trabaja con el consumo;
+# la facturación se conserva como información complementaria.) El selector está en la barra lateral y en el Panorama.
+# ----------------------------------------------------------------------------
+MEDIDAS = ["Consumo", "Facturación"]
+st.session_state.setdefault("v2_medida", "Consumo")
+
+
+def medida() -> str:
+    m = st.session_state.get("v2_medida", "Consumo")
+    return m if m in MEDIDAS else "Consumo"
+
+
+def es_consumo() -> bool:
+    return medida() == "Consumo"
+
+
+def _fijar_medida(clave_widget: str) -> None:
+    st.session_state["v2_medida"] = st.session_state.get(clave_widget, "Consumo")
+
+
+def selector_medida(clave_widget: str, compacto: bool = False) -> None:
+    """Botón Consumo / Facturación. Cambia cifras, gráficos, unidades, títulos y explicaciones de la página."""
+    st.radio("Medir en" if compacto else "Cómo medir las cifras", MEDIDAS, index=MEDIDAS.index(medida()), horizontal=True,
+             key=clave_widget, on_change=_fijar_medida, args=(clave_widget,),
+             help="Consumo: energía en kWh, MWh o GWh (lo que usa EBSA en su operación). Facturación: pesos por mes con la tarifa real "
+                  "de cada cliente (impacto comercial). Son los mismos clientes y las mismas listas; cambia la unidad con que se miden.",
+             label_visibility="collapsed" if compacto else "visible")
+
+
+def fmt_medida(x) -> str:
+    """Cifra en la medida elegida: 2,74 GWh o $2.146.230.035."""
+    return energia(x) if es_consumo() else pesos(x)
+
+
+def fmt_medida_corto(x) -> str:
+    """Cifra corta para bandas y barras: 2,74 GWh o $674,8 M."""
+    return energia_corta(x) if es_consumo() else ui.pesos_millones(x)
+
+
+def fmt_medida_md(x) -> str:
+    return energia(x) if es_consumo() else pesos_md(x)
+
+
+def unidad_medida() -> str:
+    return "kWh/mes" if es_consumo() else "$/mes"
+
+
+def col_medida(col_kwh: str, col_pesos: str) -> str:
+    return col_kwh if es_consumo() else col_pesos
+
+
 def csv_es(df: pd.DataFrame) -> bytes:
     """CSV para Excel en español: separador ';' y coma decimal, con BOM para que abra con tildes."""
     return df.to_csv(index=False, sep=";", decimal=",").encode("utf-8-sig")
@@ -223,7 +303,7 @@ _NOMBRE_A_REGIONAL = {ZONA_POR_CICLO[c]: z for c, z in ZONA_REGIONAL_POR_CICLO.i
 def agregar_zona_regional(df: pd.DataFrame) -> pd.DataFrame:
     """Zona regional (8 direcciones) para listas viejas que no la traen: desde el ciclo, la etiqueta de ciclo o el nombre de zona."""
     if df is None or "zona_regional" in df.columns:
-        return df
+        return ajustar_zona_mnr(df)
     d = df.copy()
     if "ciclo" in d.columns:
         d["zona_regional"] = nombre_zona_regional(d["ciclo"])
@@ -242,6 +322,36 @@ def agregar_zona_regional(df: pd.DataFrame) -> pd.DataFrame:
             d["zona_regional"] = "SIN ZONA"
     else:
         d["zona_regional"] = "SIN ZONA"
+    return ajustar_zona_mnr(d)
+
+
+ZONA_SIN_DIRECCION = "USUARIOS NO REGULADOS"   # ciclo 33: no pertenece a una dirección regional
+
+
+def ajustar_zona_mnr(df: pd.DataFrame) -> pd.DataFrame:
+    """Clientes del ciclo 33 (mercado no regulado) sin dirección regional: se les asigna la zona regional del municipio donde
+    están (misma regla del mapa: la zona en que la empresa factura a la mayoría de los clientes de ese municipio, archivo
+    13_ubicacion_clientes/municipios_zona.csv). Solo cambia la columna zona_regional de la pantalla; el ciclo y la zona de
+    lectura se conservan y los archivos no se tocan. (Modificaciones sugeridas, octubre 2026.)"""
+    if df is None or "zona_regional" not in df.columns or "NIU" not in df.columns:
+        return df
+    sin = df["zona_regional"].astype(str).eq(ZONA_SIN_DIRECCION)
+    if not sin.any():
+        return df
+    ub = globals().get("ubicacion"); mz = globals().get("municipios")
+    if ub is None or mz is None or "codigo_municipio" not in ub.columns or "zona_ebsa" not in mz.columns:
+        return df
+    nius = df.loc[sin, "NIU"].astype("string").str.strip()
+    # solo los pocos NIU afectados (no se recorre el cruce completo en cada ejecución)
+    llave = ub.loc[ub["NIU"].isin(set(nius)), ["NIU", "codigo_municipio"]].drop_duplicates("NIU").copy()
+    llave["codigo_municipio"] = llave["codigo_municipio"].astype(str)
+    zona_mun = dict(zip(mz["codigo_municipio"].astype(str), mz["zona_ebsa"].astype(str)))
+    asignada = nius.map(dict(zip(llave["NIU"].astype(str), llave["codigo_municipio"].map(zona_mun))))
+    d = df.copy()
+    d["zona_regional"] = d["zona_regional"].astype(object)
+    d.loc[sin, "zona_regional"] = asignada.where(asignada.notna() & asignada.ne("nan"), ZONA_SIN_DIRECCION).values
+    d["zona_regional_asignada_por_municipio"] = False
+    d.loc[sin, "zona_regional_asignada_por_municipio"] = asignada.notna().values
     return d
 
 
@@ -278,7 +388,7 @@ def limpiar_lista(df: pd.DataFrame) -> pd.DataFrame:
         d = d.copy()
         _antigua = d["veredicto"].astype(str).eq("CAIDA_SOSTENIDA") if "veredicto" in d.columns else False
         d["gravedad"] = np.where(_antigua, "ANTIGUA", d["severidad"].astype(str))
-    return agregar_zona_regional(d.reset_index(drop=True))
+    return ajustar_zona_mnr(agregar_zona_regional(d.reset_index(drop=True)))
 
 
 def filtro_zona_regional(col, df: pd.DataFrame, clave: str):
@@ -430,6 +540,7 @@ def _cerrar_sesion() -> None:
 _espacio_menu = st.sidebar.container()
 _espacio_sesion = st.sidebar.container()
 with _espacio_sesion:
+    _espacio_medida = st.container()   # el selector Consumo / Facturación se dibuja aquí salvo en el Panorama, que lo lleva arriba
     ui._html_out('<span class="v2-grp">Sesión</span>')
     st.caption(f"{PERFIL.get('nombre', USUARIO)}")
     _caja_sesion = st.expander("Datos y sesión", expanded=False)
@@ -585,6 +696,8 @@ ubicacion = ubicacion_preparada(str(R.ubicacion), R.ubicacion.stat().st_mtime).c
 if ubicacion is not None:
     _lineas_corte.append(f"Ubicación (TC1): **{str(ubicacion['periodo_tc1'].iloc[0]) if len(ubicacion) else '—'}**")
 municipios = cargar(R.municipios, dtype={"codigo_municipio": "string"})
+operativa = ajustar_zona_mnr(operativa)
+fuga = ajustar_zona_mnr(fuga)
 with _espacio_cortes:
     for _l in _lineas_corte:
         st.caption(_l)
@@ -610,6 +723,11 @@ seccion = st.session_state["seccion"]
 # Secciones de Comercial/Soporte que reutilizan una pantalla técnica
 seccion = {"Descargas": "Descargas por grupo", "Registrar resultado de visitas": "Retroalimentación"}.get(seccion, seccion)
 TABLA_ALTA = 10 if MOVIL else 25
+if seccion != "Panorama":
+    with _espacio_medida:
+        ui._html_out('<span class="v2-grp">Cifras</span>')
+        selector_medida("v2_medida_lateral", compacto=True)
+        st.caption("Consumo en kWh · facturación en pesos" if es_consumo() else "Facturación en pesos · consumo en kWh")
 
 
 def agregar_municipio(df: pd.DataFrame) -> pd.DataFrame:
@@ -655,15 +773,18 @@ def _metricas_municipio_cache(mtime_u: float, mtime_op: float, mtime_f: float, m
             caida_kwh_mes=("perdida_kwh_mes", "sum")).reset_index()
         base = base.merge(ag, on="codigo_municipio", how="left")
     if fuga is not None:
-        f = fuga[["NIU", "nivel_riesgo", "valor_esperado_perdida_mes", "valor_en_riesgo_mes"]].copy()
+        f = fuga[[c for c in ["NIU", "nivel_riesgo", "valor_esperado_perdida_mes", "valor_en_riesgo_mes", "consumo_prom_6m_kwh", "prob_fuga_6m"] if c in fuga.columns]].copy()
         f["NIU"] = f["NIU"].astype("string").str.strip()
         f = f.merge(llave, on="NIU", how="inner")
+        _am = f["nivel_riesgo"].isin(["ALTO", "MEDIO"])
+        f["_kwh_am"] = pd.to_numeric(f.get("consumo_prom_6m_kwh"), errors="coerce").fillna(0).where(_am, 0.0)
         ag = f.groupby("codigo_municipio").agg(
             fuga_puntuados=("NIU", "size"),
             fuga_alto=("nivel_riesgo", lambda x: int(x.eq("ALTO").sum())),
             fuga_medio=("nivel_riesgo", lambda x: int(x.eq("MEDIO").sum())),
             fuga_perdida_esperada_mes=("valor_esperado_perdida_mes", "sum"),
-            fuga_facturacion_mes=("valor_en_riesgo_mes", "sum")).reset_index()
+            fuga_facturacion_mes=("valor_en_riesgo_mes", "sum"),
+            fuga_consumo_alto_medio_kwh_mes=("_kwh_am", "sum")).reset_index()
         base = base.merge(ag, on="codigo_municipio", how="left")
     for c in base.columns:
         if c.startswith(("caida_", "fuga_")):
@@ -701,21 +822,46 @@ METRICAS_MAPA_TECNICO = {
     "Fuga: clientes ALTO": ("fuga_alto", "clientes"),
     "Fuga: pérdida esperada / mes": ("fuga_perdida_esperada_mes", "$"),
 }
-METRICAS_MAPA_COMERCIAL = {
-    "Facturación que se está perdiendo por caída de consumo ($/mes)": ("caida_valor_mes", "$"),
-    "Clientes con caída de consumo para revisar": ("caida_clientes", "clientes"),
-    "Clientes con caída grave reciente": ("caida_criticos", "clientes"),
-    "Clientes con probabilidad de fuga alta o media": ("fuga_alto_medio", "clientes"),
-    "Pérdida esperada por probabilidad de fuga ($/mes)": ("fuga_perdida_esperada_mes", "$"),
-    "Clientes de EBSA en el municipio": ("clientes_tc1", "clientes"),
-}
+METRICAS_MAPA_TECNICO["Fuga: consumo de los ALTO + MEDIO / mes"] = ("fuga_consumo_alto_medio_kwh_mes", "kWh")
+
+
+def metricas_mapa_comercial() -> dict:
+    """Cifras del mapa comercial según la medida elegida (consumo primero, facturación como complemento, o al revés)."""
+    consumo = {
+        "Consumo que se está perdiendo por caída de consumo (kWh/mes)": ("caida_kwh_mes", "kWh"),
+        "Clientes con caída de consumo para revisar": ("caida_clientes", "clientes"),
+        "Clientes con caída grave reciente": ("caida_criticos", "clientes"),
+        "Clientes con probabilidad de fuga alta o media": ("fuga_alto_medio", "clientes"),
+        "Consumo de los clientes con probabilidad de fuga alta o media (kWh/mes)": ("fuga_consumo_alto_medio_kwh_mes", "kWh"),
+        "Clientes de EBSA en el municipio": ("clientes_tc1", "clientes"),
+        "Facturación que se está perdiendo por caída de consumo ($/mes)": ("caida_valor_mes", "$"),
+        "Pérdida esperada por probabilidad de fuga ($/mes)": ("fuga_perdida_esperada_mes", "$"),
+    }
+    facturacion = {
+        "Facturación que se está perdiendo por caída de consumo ($/mes)": ("caida_valor_mes", "$"),
+        "Clientes con caída de consumo para revisar": ("caida_clientes", "clientes"),
+        "Clientes con caída grave reciente": ("caida_criticos", "clientes"),
+        "Clientes con probabilidad de fuga alta o media": ("fuga_alto_medio", "clientes"),
+        "Pérdida esperada por probabilidad de fuga ($/mes)": ("fuga_perdida_esperada_mes", "$"),
+        "Clientes de EBSA en el municipio": ("clientes_tc1", "clientes"),
+        "Consumo que se está perdiendo por caída de consumo (kWh/mes)": ("caida_kwh_mes", "kWh"),
+        "Consumo de los clientes con probabilidad de fuga alta o media (kWh/mes)": ("fuga_consumo_alto_medio_kwh_mes", "kWh"),
+    }
+    return consumo if es_consumo() else facturacion
+
+
+METRICAS_MAPA_COMERCIAL = metricas_mapa_comercial()   # compatibilidad con código que lea la constante
 
 
 def _fmt_metrica(v, unidad):
     if unidad == "$ por cliente":
         return pesos(v) + " por cliente"
+    if unidad == "kWh por cliente":
+        return fmt_n(v) + " kWh por cliente"
     if unidad == "por cada 1.000 clientes":
         return fmt_n(v, 1) + " por cada 1.000 clientes"
+    if unidad == "kWh":
+        return energia(v)
     return pesos(v) if unidad == "$" else (fmt_n(v, 2) + " %" if unidad == "%" else fmt_n(v) + " " + unidad)
 
 
@@ -833,7 +979,7 @@ def dibujar_mapa(mm: pd.DataFrame, metricas: dict, clave: str, puntos: bool = Fa
             met_unidad = "por cada 1.000 clientes"
         else:
             d["valor"] = (d["valor"] / cli).where(cli > 0, 0).fillna(0)
-            met_unidad = "$ por cliente" if met_unidad == "$" else f"{met_unidad} por cliente"
+            met_unidad = "$ por cliente" if met_unidad == "$" else ("kWh por cliente" if met_unidad == "kWh" else f"{met_unidad} por cliente")
         st.session_state[f"modo_texto_{clave}"] = f" ({met_unidad})"
     ui._html_out(f'<p class="v2-conteo"><b>{fmt_n(len(d))}</b> municipios de Boyacá · {ui._esc(met_nombre)}: '
                  f'<b>{_fmt_metrica(total_val, unidad_total) if unidad_total != "%" else "—"}</b>'
@@ -910,12 +1056,20 @@ def dibujar_mapa(mm: pd.DataFrame, metricas: dict, clave: str, puntos: bool = Fa
             tabla(z, clave=f"mapa_zona_{clave}", hide_index=True)
         with c2:
             st.markdown("**Por municipio**")
-            cols_m = [c for c in ["municipio", "provincia", "zona_ebsa", "clientes_tc1", "caida_clientes", "caida_criticos",
-                                  "caida_valor_mes", "fuga_alto", "fuga_medio", "fuga_perdida_esperada_mes"] if c in d.columns]
+            _orden_m = (["municipio", "provincia", "zona_ebsa", "clientes_tc1", "caida_clientes", "caida_criticos", "caida_kwh_mes",
+                         "caida_valor_mes", "fuga_alto", "fuga_medio", "fuga_consumo_alto_medio_kwh_mes", "fuga_perdida_esperada_mes"] if es_consumo() else
+                        ["municipio", "provincia", "zona_ebsa", "clientes_tc1", "caida_clientes", "caida_criticos", "caida_valor_mes",
+                         "caida_kwh_mes", "fuga_alto", "fuga_medio", "fuga_perdida_esperada_mes", "fuga_consumo_alto_medio_kwh_mes"])
+            cols_m = [c for c in _orden_m if c in d.columns]
             t = d.sort_values("valor", ascending=False)[cols_m].rename(columns={
                 "municipio": "Municipio", "provincia": "Provincia", "zona_ebsa": "Zona", "clientes_tc1": "Clientes",
                 "caida_clientes": "Con caída", "caida_criticos": "Caída crítica", "caida_valor_mes": "Facturación en riesgo $/mes",
+                "caida_kwh_mes": "Consumo en riesgo kWh/mes", "fuga_consumo_alto_medio_kwh_mes": "Consumo fuga ALTO+MEDIO kWh/mes",
                 "fuga_alto": "Fuga ALTO", "fuga_medio": "Fuga MEDIO", "fuga_perdida_esperada_mes": "Pérdida esperada fuga $/mes"})
+            if "Consumo en riesgo kWh/mes" in t.columns:
+                t["Consumo en riesgo kWh/mes"] = t["Consumo en riesgo kWh/mes"].round(0)
+            if "Consumo fuga ALTO+MEDIO kWh/mes" in t.columns:
+                t["Consumo fuga ALTO+MEDIO kWh/mes"] = t["Consumo fuga ALTO+MEDIO kWh/mes"].round(0)
             tabla(t, clave=f"mapa_mun_{clave}", hide_index=True, height=380)
             st.download_button("Descargar municipios (CSV)", csv_es(t),
                                file_name=f"mapa_municipios_{corte_actual or ''}.csv", mime="text/csv", key=f"dl_{clave}")
@@ -1027,6 +1181,19 @@ def _si(valor) -> bool:
         return False
 
 
+def _periodo_tc1() -> str:
+    try:
+        return str(ubicacion["periodo_tc1"].iloc[0]) if ubicacion is not None and len(ubicacion) else "—"
+    except Exception:
+        return "—"
+
+
+AYUDA_NIVEL_TENSION = ("Nivel de tensión tal como viene en el archivo TC1 de la empresa (1 = baja tensión; 2, 3 y 4 = niveles superiores). "
+                       "Es el dato registrado en el inventario de usuarios: puede estar desactualizado si el cliente amplió carga después "
+                       "(observación de negocio, octubre 2026). El proyecto no dispone de una fuente más reciente, así que se muestra como "
+                       "referencia y no se usa en ningún cálculo.")
+
+
 def _kpi_texto(titulo, valor, **kw) -> dict:
     """Indicador cuyo valor es una palabra o frase (no una cifra)."""
     return dict(titulo=titulo, valor=valor, texto=True, **kw)
@@ -1059,7 +1226,8 @@ def ficha_cliente_simple(niu: str) -> None:
         kpis([_kpi_texto("Municipio", str(uu.get("municipio", "—"))),
               _kpi_texto("Zona", str(uu.get("zona_mapa", "—")) if pd.notna(uu.get("zona_mapa", np.nan)) else "—"),
               _kpi_texto("Dirección", ui.enmascarar(_dir) if oculto else _dir),
-              _kpi_texto("Nivel de tensión", str(uu.get("nivel_tension", "—")))], compacto=True, clave="ficha_donde")
+              _kpi_texto("Nivel de tensión (TC1)", str(uu.get("nivel_tension", "—")), ayuda=AYUDA_NIVEL_TENSION)], compacto=True, clave="ficha_donde")
+        st.caption(f"El nivel de tensión viene del TC1 (corte {_periodo_tc1()}) y puede no reflejar ampliaciones de carga posteriores; es solo referencia.")
     else:
         kpis([_kpi_texto("Municipio", "—")], columnas=4, compacto=True, clave="ficha_donde")
         st.caption("Este NIU no está en el archivo TC1 cruzado (puede ser un cliente nuevo).")
@@ -1081,7 +1249,7 @@ def ficha_cliente_simple(niu: str) -> None:
                                "No aparece en las listas de caída ni de fuga; una caída en él no es un problema."))
     if len(yz):
         y = yz.iloc[0]
-        avisos.append(("alerta", f"**Ya está con otro comercializador** ({y.get('comercializador', '—')}), desde "
+        avisos.append(("alerta", f"**Ya está con otro comercializador**, desde "
                                  f"{str(y.get('primer_mes_otro', ''))[:7]}. Estado en el archivo de la empresa: {y['estado']}."))
     if len(vz):
         v = vz.iloc[0]
@@ -1117,13 +1285,18 @@ def ficha_cliente_simple(niu: str) -> None:
         kpis([k1, k2, k3], columnas=3, compacto=True, clave="ficha_caida")
         if str(oo.get("prioridad_gestion", "")).startswith(("VIGILAR", "SEGUIMIENTO")):
             st.caption("Prioridad: **" + PRIORIDAD_SIMPLE.get(str(oo["prioridad_gestion"]), str(oo["prioridad_gestion"])) + "**")
+        _tarifa = oo.get("tarifa_kwh", np.nan)
+        _perdida_txt = (f"deja de consumir **{kwh(oo.get('perdida_kwh_mes', np.nan))}/mes** "
+                        f"({pesos_md(oo.get('valor_riesgo_mes', np.nan))}/mes con su tarifa de {pesos_md(_tarifa)}/kWh)" if es_consumo() else
+                        f"son **{pesos_md(oo.get('valor_riesgo_mes', np.nan))}/mes** menos de facturación "
+                        f"({kwh(oo.get('perdida_kwh_mes', np.nan))}/mes a su tarifa de {pesos_md(_tarifa)}/kWh)")
         if es_antigua:
             _frase = (f"Hace un año consumía **{kwh(ref_kwh)}/mes** y ahora **{kwh(oo.get('consumo_reciente_kwh', np.nan))}/mes**: "
-                      f"son **{pesos_md(oo.get('valor_riesgo_mes', np.nan))}/mes** menos de facturación. Frente a los meses anteriores "
+                      f"{_perdida_txt}. Frente a los meses anteriores "
                       f"(**{kwh(oo.get('consumo_anterior_kwh', np.nan))}/mes**) se mantiene: es una caída que lleva meses, no reciente. ")
         else:
             _frase = (f"Consumía **{kwh(ref_kwh)}/mes** y ahora **{kwh(oo.get('consumo_reciente_kwh', np.nan))}/mes**: "
-                      f"son **{pesos_md(oo.get('valor_riesgo_mes', np.nan))}/mes** menos de facturación. ")
+                      f"{_perdida_txt}. ")
         st.markdown(_frase + ""
                     f"{ESTADO_LISTA_SIMPLE.get(str(oo.get('estado_en_lista', '')), '')}"
                     + (f" (lleva {int(oo.get('meses_consecutivos_en_lista', 1))} cortes seguidos en la lista)." if str(oo.get("estado_en_lista", "")) == "PERSISTENTE" else "."))
@@ -1146,8 +1319,13 @@ def ficha_cliente_simple(niu: str) -> None:
         nivel = str(z["nivel_riesgo"])
         kpis([_kpi_texto("Probabilidad de fuga a otro comercializador", nivel, tono="alerta" if nivel == "ALTO" else ("aviso" if nivel == "MEDIO" else None)),
               dict(titulo="Probabilidad en 6 meses", valor=prob_pct(z["prob_fuga_6m"])),
-              dict(titulo="Factura promedio (últimos 6 meses)", valor=f"{pesos(z.get('valor_en_riesgo_mes', np.nan))}", unidad="/mes",
-                   ayuda="Consumo promedio de los últimos 6 meses por su tarifa real; en un cliente estacional incluye la temporada alta.")],
+              (dict(titulo="Consumo promedio (últimos 6 meses)", valor=energia(z.get("consumo_prom_6m_kwh", np.nan)), unidad="/mes",
+                    nota=f"factura {pesos(z.get('valor_en_riesgo_mes', np.nan))}/mes",
+                    ayuda="Consumo promedio de los últimos 6 meses; en un cliente estacional incluye la temporada alta. El valor en pesos usa su tarifa real.")
+               if es_consumo() else
+               dict(titulo="Factura promedio (últimos 6 meses)", valor=f"{pesos(z.get('valor_en_riesgo_mes', np.nan))}", unidad="/mes",
+                    nota=f"consume {energia(z.get('consumo_prom_6m_kwh', np.nan))}/mes",
+                    ayuda="Consumo promedio de los últimos 6 meses por su tarifa real; en un cliente estacional incluye la temporada alta."))],
              columnas=3, compacto=True, clave="ficha_fuga")
         txt = NIVEL_FUGA_SIMPLE.get(nivel, "")
         if isinstance(z.get("senales"), str) and z["senales"]:
@@ -1306,6 +1484,40 @@ NOTA_REGLAS_LISTA = ("Las listas no incluyen autogeneradores ni las clases área
                      "(regla de negocio acordada con el experto). El valor en pesos usa la tarifa real de cada cliente.")
 
 
+HORIZONTES_PROY = {"12 meses (recomendado)": 12, "24 meses": 24, "Todo lo calculado": None}
+st.session_state.setdefault("v2_horizonte_meses", 12)
+
+
+def horizonte_meses() -> int | None:
+    """Meses de proyección que se muestran (pedido de negocio, octubre 2026: un año). El modelo calcula 36; no se recalcula nada,
+    solo se recorta lo que se presenta. None = todo lo calculado."""
+    return st.session_state.get("v2_horizonte_meses", 12)
+
+
+def _fijar_horizonte(clave_widget: str) -> None:
+    st.session_state["v2_horizonte_meses"] = HORIZONTES_PROY.get(st.session_state.get(clave_widget), 12)
+
+
+def recortar_proyeccion(pm: pd.DataFrame, pa: pd.DataFrame, meses: int | None):
+    """Devuelve (mensual recortada, anual recortada, último mes real, fin del horizonte, años fuera). Un año anual se muestra solo si
+    todos sus meses proyectados caben en el horizonte (si no, su total anual no correspondería a lo que se dibuja)."""
+    reales = pm[pm["tipo"] == "REAL"]["periodo"]
+    if meses is None or not len(reales):
+        return pm, pa, (reales.max() if len(reales) else None), None, []
+    ultimo = reales.max()
+    fin = ultimo + pd.DateOffset(months=int(meses))
+    pm_r = pm[(pm["tipo"] != "PROYECCION") | (pm["periodo"] <= fin)]
+    fuera = sorted(int(a_) for a_ in pa.loc[(pa["meses_proyectados"] > 0) & (pa["anio"].astype(int) > fin.year), "anio"].unique())
+    pa_r = pa[~pa["anio"].astype(int).isin(fuera)]
+    # el año en que termina el horizonte solo se muestra completo si el horizonte llega a diciembre
+    if fin.month != 12:
+        parcial = int(fin.year)
+        if ((pa["anio"].astype(int) == parcial) & (pa["meses_proyectados"] > 0)).any() and parcial != int(ultimo.year):
+            fuera = sorted(set(fuera) | {parcial})
+            pa_r = pa_r[pa_r["anio"].astype(int) != parcial]
+    return pm_r, pa_r, ultimo, fin, fuera
+
+
 @st.cache_data(show_spinner=False)
 def _proyeccion_total(ruta_m: str, mtime_m: float, ruta_a: str, mtime_a: float):
     """Serie mensual y totales por año del total de clientes, escenario base (para la tarjeta del Panorama)."""
@@ -1330,7 +1542,11 @@ def tarjeta_proyeccion_total() -> None:
     pm_t, pa_t = _proyeccion_total(str(R.proy_mensual), R.proy_mensual.stat().st_mtime, str(R.proy_anual), R.proy_anual.stat().st_mtime)
     if pm_t is None or len(pa_t) == 0:
         return
-    with tarjeta("Consumo de energía de todos los clientes", "Consumo real por año y proyección del escenario base (GWh)", clave="pan_proy", plegable=True):
+    _h = horizonte_meses()
+    pm_t, pa_t, _ult, _fin, _fuera = recortar_proyeccion(pm_t, pa_t, _h)
+    _baj = ("Consumo real por año y proyección del escenario base a " + (f"{_h} meses" if _h else "todo el horizonte calculado") + " (GWh)"
+            + (f" · los años {', '.join(map(str, _fuera))} quedan fuera del horizonte mostrado" if _fuera else ""))
+    with tarjeta("Consumo de energía de todos los clientes", _baj, clave="pan_proy", plegable=True):
         celdas = []
         for r in pa_t.tail(6).itertuples():
             proy, real = int(r.meses_proyectados), int(r.meses_reales)
@@ -1363,7 +1579,9 @@ def tarjeta_proyeccion_total() -> None:
         except Exception:
             pass
         ui.pie("La proyección es un escenario con margen de error, no una cifra exacta: el detalle por zona, las bandas y qué años son "
-               "confiables están en la sección *Proyección de consumo*.")
+               "confiables están en la sección *Proyección de consumo*."
+               + (f" Se muestran {_h} meses de proyección a partir del último mes real ({ui.mes_largo(str(_ult)[:7]) if _ult is not None else '—'}); "
+                  "el horizonte se cambia en esa sección." if _h else ""))
 
 
 # ============================================================================
@@ -1374,37 +1592,54 @@ if seccion == "Panorama":
     if operativa is None and fuga is None:
         aviso("Todavía no hay salidas del pipeline. Corre python pipeline_mensual.py --modo aplicar y vuelve a abrir la página.", "alerta")
         st.stop()
+    # Selector Consumo / Facturación (pedido de negocio: EBSA trabaja con el consumo; la facturación muestra el impacto comercial)
+    with ui._contenedor("v2fila_medida"):
+        c_sel, c_txt = st.columns([1, 2]) if not MOVIL else (st.container(), st.container())
+        with c_sel:
+            selector_medida("v2_medida_panorama")
+        with c_txt:
+            st.caption("**Consumo**: energía que se deja de consumir, en kWh, MWh o GWh por mes. **Facturación**: esa misma energía valorada "
+                       "con la tarifa real de cada cliente, en pesos por mes. Cambia la unidad de medida; los clientes y las listas son los mismos."
+                       if es_consumo() else
+                       "**Facturación**: pesos por mes que se dejan de facturar, con la tarifa real de cada cliente. **Consumo**: la misma "
+                       "pérdida medida en energía (kWh, MWh o GWh). Cambia la unidad de medida; los clientes y las listas son los mismos.")
 
     ya = cargar(R.fuga_ya_fuera, dtype={"NIU": "string"})
     vg = cargar(R.fuga_vigilancia, dtype={"NIU": "string"})
     cs = cargar(R.cero_sostenido, dtype={"NIU": "string"})
+    _col_op = col_medida("perdida_kwh_mes", "valor_riesgo_mes")
+    _u = unidad_medida()
 
-    # ----- Lo principal: cuántos clientes cayeron, cuánto dejan de facturar y cómo se reparte por prioridad -----
+    # ----- Lo principal: cuántos clientes cayeron, cuánto dejan de consumir (o facturar) y cómo se reparte por prioridad -----
     if operativa is not None:
         _ges = operativa[operativa["prioridad_gestion"].astype(str).eq("GESTIONAR")] if "prioridad_gestion" in operativa.columns else operativa
-        with tarjeta(f"{fmt_n(len(operativa))} clientes consumen menos de lo normal para clientes parecidos",
-                     f"Entre todos dejan de facturar **{pesos(operativa['valor_riesgo_mes'].sum())} al mes**, medido con la tarifa real de cada cliente. "
-                     "Así se reparte según lo que hay que hacer:", hero=True, clave="pan"):
+        _total_op = operativa[_col_op].sum()
+        _bajada = (f"Entre todos dejan de consumir **{energia(_total_op)} al mes** (energía que antes pasaba por sus medidores y ya no). "
+                   f"En pesos: {pesos(operativa['valor_riesgo_mes'].sum())}/mes con la tarifa real de cada cliente. Así se reparte según lo que hay que hacer:"
+                   if es_consumo() else
+                   f"Entre todos dejan de facturar **{pesos(_total_op)} al mes**, medido con la tarifa real de cada cliente "
+                   f"(equivale a {energia(operativa['perdida_kwh_mes'].sum())}/mes). Así se reparte según lo que hay que hacer:")
+        with tarjeta(f"{fmt_n(len(operativa))} clientes consumen menos de lo normal para clientes parecidos", _bajada, hero=True, clave="pan"):
             ui.registrar("kpi", "pan", ("Clientes con caída de consumo", fmt_n(len(operativa)), f"{fmt_n(len(_ges))} para gestionar ahora"))
-            ui.registrar("kpi", "pan", ("Facturación que se está perdiendo", f"{pesos(operativa['valor_riesgo_mes'].sum())}/mes",
-                                        f"{pesos(_ges['valor_riesgo_mes'].sum())}/mes para gestionar"))
+            ui.registrar("kpi", "pan", ("Consumo que se está perdiendo" if es_consumo() else "Facturación que se está perdiendo",
+                                        f"{fmt_medida(_total_op)}/mes", f"{fmt_medida(_ges[_col_op].sum())}/mes para gestionar"))
             if "prioridad_gestion" in operativa.columns:
                 _pri = operativa["prioridad_gestion"].astype(str)
                 _seg = operativa[_pri.str.startswith("SEGUIMIENTO")]
                 _vig = operativa[_pri.str.startswith("VIGILAR")]
                 ui.banda([
-                    dict(nombre="Gestionar ahora", valor=ui.pesos_millones(_ges["valor_riesgo_mes"].sum()), unidad="/mes",
-                         detalle=f"{fmt_n(len(_ges))} clientes", peso=_ges["valor_riesgo_mes"].sum(), color=C["gestionar"]),
-                    dict(nombre="Seguimiento", valor=ui.pesos_millones(_seg["valor_riesgo_mes"].sum()), unidad="/mes",
-                         detalle=f"{fmt_n(len(_seg))} clientes", peso=_seg["valor_riesgo_mes"].sum(), color=C["seguimiento"]),
-                    dict(nombre="Vigilar", valor=ui.pesos_millones(_vig["valor_riesgo_mes"].sum()), unidad="/mes",
-                         detalle=f"{fmt_n(len(_vig))} clientes", peso=_vig["valor_riesgo_mes"].sum(), color=C["vigilar_osc"]),
+                    dict(nombre="Gestionar ahora", valor=fmt_medida_corto(_ges[_col_op].sum()), unidad="/mes",
+                         detalle=f"{fmt_n(len(_ges))} clientes", peso=_ges[_col_op].sum(), color=C["gestionar"]),
+                    dict(nombre="Seguimiento", valor=fmt_medida_corto(_seg[_col_op].sum()), unidad="/mes",
+                         detalle=f"{fmt_n(len(_seg))} clientes", peso=_seg[_col_op].sum(), color=C["seguimiento"]),
+                    dict(nombre="Vigilar", valor=fmt_medida_corto(_vig[_col_op].sum()), unidad="/mes",
+                         detalle=f"{fmt_n(len(_vig))} clientes", peso=_vig[_col_op].sum(), color=C["vigilar_osc"]),
                 ])
-                ui.pie(f"**Gestionar ahora** son las caídas recientes ({pesos(_ges['valor_riesgo_mes'].sum())}/mes). **Seguimiento** son caídas que llevan "
+                ui.pie(f"**Gestionar ahora** son las caídas recientes ({fmt_medida(_ges[_col_op].sum())}/mes). **Seguimiento** son caídas que llevan "
                        "meses en ese nivel: reales, pero no urgentes. **Vigilar** reúne clientes de temporada y con recuperación prevista.")
             else:
                 kpis([dict(titulo="Para gestionar ahora", valor=fmt_n(len(_ges)), unidad=" clientes"),
-                      dict(titulo="Facturación por gestionar", valor=pesos(_ges["valor_riesgo_mes"].sum()), unidad="/mes")], clave="pan")
+                      dict(titulo="Consumo por gestionar" if es_consumo() else "Facturación por gestionar", valor=fmt_medida(_ges[_col_op].sum()), unidad="/mes")], clave="pan")
 
     # ----- Indicadores -----
     fila1, fila2 = [], []
@@ -1423,12 +1658,20 @@ if seccion == "Panorama":
                           nota="No significa que se vayan a ir: es a quién contactar primero",
                           ayuda="Probabilidad de fuga ALTA o MEDIA según el modelo, entre los clientes comerciales, industriales, oficiales y acueductos. "
                                 "No significa que se vayan a ir: es a quién contactar primero."))
-        fila1.append(dict(titulo="Pérdida esperada (fuga)", valor=pesos(senal["valor_esperado_perdida_mes"].sum()), unidad="/mes",
-                          nota="Orden de magnitud para priorizar",
-                          ayuda="Probabilidad de fuga × lo que factura hoy cada uno. Es un orden de magnitud para priorizar, no dinero que se vaya a perder con certeza."))
+        if es_consumo():
+            fila1.append(dict(titulo="Consumo de esos clientes", valor=energia(senal["consumo_prom_6m_kwh"].sum()), unidad="/mes",
+                              nota="Promedio de los últimos 6 meses",
+                              ayuda="Energía que consumen hoy los clientes con probabilidad de fuga alta o media (promedio de 6 meses). "
+                                    "Es lo que estaría en juego si se fueran; no es una predicción de que se vayan."))
+        else:
+            fila1.append(dict(titulo="Pérdida esperada (fuga)", valor=pesos(senal["valor_esperado_perdida_mes"].sum()), unidad="/mes",
+                              nota="Orden de magnitud para priorizar",
+                              ayuda="Probabilidad de fuga × lo que factura hoy cada uno. Es un orden de magnitud para priorizar, no dinero que se vaya a perder con certeza."))
     if cs is not None and len(cs):
+        _cs_ref = pd.to_numeric(cs["consumo_referencia_kwh"] if "consumo_referencia_kwh" in cs.columns else cs.get("consumo_anterior_kwh"), errors="coerce")
         fila2.append(dict(titulo="Clientes sin consumo", valor=fmt_n(len(cs)),
-                          nota=f"3 meses o más en cero o casi cero; facturaban {pesos(cs['valor_facturaba_antes_mes'].sum())}/mes",
+                          nota=(f"3 meses o más en cero o casi cero; consumían {energia(_cs_ref.sum())}/mes" if es_consumo() else
+                                f"3 meses o más en cero o casi cero; facturaban {pesos(cs['valor_facturaba_antes_mes'].sum())}/mes"),
                           ayuda="No se cuentan como caída porque ya no consumen; están en la sección Clientes sin consumo."))
     if ya is not None and len(ya):
         fila2.append(dict(titulo="Ya atendidos por otro comercializador", valor=fmt_n(int(ya["estado"].astype(str).str.startswith("CON OTRO").sum())),
@@ -1447,45 +1690,56 @@ if seccion == "Panorama":
         c_mapa, c_top = st.columns([3, 2])
         with c_mapa:
             with tarjeta("Dónde está pasando", "Municipios de Boyacá con sus límites oficiales", clave="pan_mapa"):
-                d_mapa = dibujar_mapa(mm, METRICAS_MAPA_COMERCIAL, clave="comercial", puntos=False, altura=520)
+                d_mapa = dibujar_mapa(mm, metricas_mapa_comercial(), clave="comercial", puntos=False, altura=520)
         with c_top:
             top = d_mapa.sort_values("valor", ascending=False).head(10)
             if len(top) and top["valor"].sum() > 0:
                 _cifra = str(st.session_state.get("met_comercial", "la cifra elegida"))
                 _titulo_top = f"{_cifra}{st.session_state.get('modo_texto_comercial', '')}"
                 with tarjeta("Los diez municipios con más", _titulo_top + ", de mayor a menor", clave="pan_top"):
-                    _es_pesos = "$" in _cifra and not st.session_state.get("modo_texto_comercial", "")
+                    _en_prop = bool(st.session_state.get("modo_texto_comercial", ""))
+                    _es_pesos = "$" in _cifra and not _en_prop
+                    _es_kwh = "kWh" in _cifra and not _en_prop
                     ui.barras(top.set_index("municipio")["valor"], color=NARANJA if "caída" in _cifra.lower() or "perdiendo" in _cifra.lower() else AZUL,
-                              textos=[ui.pesos_millones(v) for v in top["valor"]] if _es_pesos else list(top["valor_texto"]),
+                              textos=([ui.pesos_millones(v) for v in top["valor"]] if _es_pesos else
+                                      [energia(v) for v in top["valor"]] if _es_kwh else list(top["valor_texto"])),
                               nombre_valor=_cifra, nombre_categoria="Municipio", clave="pan_top10", alto_fila=34)
-                    if d_mapa["valor_total"].sum() > 0 and not st.session_state.get("modo_texto_comercial", ""):
+                    if d_mapa["valor_total"].sum() > 0 and not _en_prop:
                         ui.pie(f"Estos diez municipios reúnen el **{fmt_n(top['valor_total'].sum() / d_mapa['valor_total'].sum() * 100, 0)} %** "
                                f"del total de los {fmt_n(len(d_mapa))} municipios mostrados.")
 
     if operativa is not None:
+        _nombre_col = "Consumo que se pierde (kWh/mes)" if es_consumo() else "Facturación que se pierde ($/mes)"
         with tarjeta("Caídas de consumo por zona regional", "Cuántos clientes tienen caída de consumo en cada dirección regional y de qué gravedad", clave="pan_zona", plegable=True):
             c1, c2 = st.columns([3, 2])
             with c1:
                 grafico_gravedad_por_zona(operativa, "pan_gravedad_zona")
             with c2:
                 rz = operativa.groupby("zona_regional").agg(**{"Clientes con caída": ("NIU", "size"),
+                                                               "Consumo que se pierde (kWh/mes)": ("perdida_kwh_mes", "sum"),
                                                                "Facturación que se pierde ($/mes)": ("valor_riesgo_mes", "sum")}).reset_index()
-                rz = rz.rename(columns={"zona_regional": "Zona regional"}).sort_values("Facturación que se pierde ($/mes)", ascending=False)
+                rz["Consumo que se pierde (kWh/mes)"] = rz["Consumo que se pierde (kWh/mes)"].round(0)
+                rz = rz.rename(columns={"zona_regional": "Zona regional"}).sort_values(_nombre_col, ascending=False)
+                if not es_consumo():
+                    rz = rz[["Zona regional", "Clientes con caída", "Facturación que se pierde ($/mes)", "Consumo que se pierde (kWh/mes)"]]
                 tabla(rz, clave="pan_rz", hide_index=True, height=320)
             ui.pie("**Grave** = caída reciente muy por encima de lo normal del segmento: revisar medidor y lectura primero. "
-                   "**Antigua** = lleva meses en ese nivel; va en seguimiento, no como urgente.")
+                   "**Antigua** = lleva meses en ese nivel; va en seguimiento, no como urgente."
+                   + (" Los clientes del mercado no regulado (ciclo 33) se cuentan en la zona regional de su municipio." if "zona_regional_asignada_por_municipio" in operativa.columns and operativa["zona_regional_asignada_por_municipio"].any() else ""))
 
+        _tit_med = "Consumo en riesgo" if es_consumo() else "Facturación en riesgo"
+        _baj_med = "kWh por mes, de mayor a menor" if es_consumo() else "Pesos por mes, de mayor a menor"
         c1, c2 = st.columns(2)
         with c1:
-            with tarjeta("Facturación en riesgo por clase de servicio", "Pesos por mes, de mayor a menor", clave="pan_clase", plegable=True):
+            with tarjeta(f"{_tit_med} por clase de servicio", _baj_med, clave="pan_clase", plegable=True):
                 col = "clase_servicio_nombre" if "clase_servicio_nombre" in operativa.columns else "clase_servicio"
-                t = operativa.groupby(col).agg(clientes=("NIU", "size"), valor=("valor_riesgo_mes", "sum")).sort_values("valor", ascending=False)
-                ui.barras(t["valor"], formato=ui.pesos_millones, color=AZUL, nombre_valor="Facturación en riesgo", nombre_categoria="Clase de servicio", clave="pan_por_clase")
+                t = operativa.groupby(col).agg(clientes=("NIU", "size"), valor=(_col_op, "sum")).sort_values("valor", ascending=False)
+                ui.barras(t["valor"], formato=fmt_medida_corto, color=AZUL, nombre_valor=_tit_med, nombre_categoria="Clase de servicio", clave="pan_por_clase")
         with c2:
-            with tarjeta("Facturación en riesgo por tamaño del cliente", "Pesos por mes, de mayor a menor", clave="pan_tam", plegable=True):
+            with tarjeta(f"{_tit_med} por tamaño del cliente", _baj_med, clave="pan_tam", plegable=True):
                 col = "grupo_consumo" if "grupo_consumo" in operativa.columns else "tramo_consumo"
-                t = operativa.groupby(col).agg(clientes=("NIU", "size"), valor=("valor_riesgo_mes", "sum")).sort_values("valor", ascending=False)
-                ui.barras(t["valor"], formato=ui.pesos_millones, color=AZUL, nombre_valor="Facturación en riesgo", nombre_categoria="Tamaño", clave="pan_por_tamano")
+                t = operativa.groupby(col).agg(clientes=("NIU", "size"), valor=(_col_op, "sum")).sort_values("valor", ascending=False)
+                ui.barras(t["valor"], formato=fmt_medida_corto, color=AZUL, nombre_valor=_tit_med, nombre_categoria="Tamaño", clave="pan_por_tamano")
 
     tarjeta_proyeccion_total()
 
@@ -1527,11 +1781,24 @@ elif seccion == "Clientes con probabilidad de fuga":
         d = d[d["clase_servicio_nombre"].astype(str).isin(cla)]
     if tam:
         d = d[d["grupo_consumo"].isin(tam)]
-    d = d.sort_values(["valor_esperado_perdida_mes", "prob_fuga_6m"], ascending=False)
-    kpis([dict(titulo="Clientes", valor=fmt_n(len(d)), tono="marca"),
-          dict(titulo="Facturan (promedio 6 meses)", valor=pesos(d["valor_en_riesgo_mes"].sum()), unidad="/mes"),
-          dict(titulo="Pérdida esperada", valor=pesos(d["valor_esperado_perdida_mes"].sum()), unidad="/mes", tono="g",
-               nota="Probabilidad × lo que factura: orden de magnitud")], columnas=3, clave="com_fuga")
+    d["_consumo_6m"] = pd.to_numeric(d.get("consumo_prom_6m_kwh"), errors="coerce")
+    d["_consumo_esperado_kwh"] = pd.to_numeric(d["prob_fuga_6m"], errors="coerce") * d["_consumo_6m"]
+    _col_f = col_medida("_consumo_esperado_kwh", "valor_esperado_perdida_mes")
+    d = d.sort_values([_col_f, "prob_fuga_6m"], ascending=False, na_position="last")
+    if es_consumo():
+        kpis([dict(titulo="Clientes", valor=fmt_n(len(d)), tono="marca"),
+              dict(titulo="Consumen (promedio 6 meses)", valor=energia(d["_consumo_6m"].sum()), unidad="/mes",
+                   nota=f"facturan {pesos(d['valor_en_riesgo_mes'].sum())}/mes"),
+              dict(titulo="Consumo esperado en riesgo", valor=energia(d["_consumo_esperado_kwh"].sum()), unidad="/mes", tono="g",
+                   nota="Probabilidad × lo que consume: orden de magnitud",
+                   ayuda="Probabilidad de fuga a 6 meses × consumo promedio de 6 meses de cada cliente, en kWh. Misma definición que la pérdida esperada en pesos, "
+                         "medida en energía en lugar de con la tarifa.")], columnas=3, clave="com_fuga")
+    else:
+        kpis([dict(titulo="Clientes", valor=fmt_n(len(d)), tono="marca"),
+              dict(titulo="Facturan (promedio 6 meses)", valor=pesos(d["valor_en_riesgo_mes"].sum()), unidad="/mes",
+                   nota=f"consumen {energia(d['_consumo_6m'].sum())}/mes"),
+              dict(titulo="Pérdida esperada", valor=pesos(d["valor_esperado_perdida_mes"].sum()), unidad="/mes", tono="g",
+                   nota="Probabilidad × lo que factura: orden de magnitud")], columnas=3, clave="com_fuga")
     linea_conteo(min(len(d), 1000), len(d), int(fuga["nivel_riesgo"].isin(["ALTO", "MEDIO"]).sum()), len(fuga),
                  "clientes con riesgo", "con riesgo ALTO o MEDIO en total", "clientes evaluados por el modelo")
     t = pd.DataFrame({
@@ -1542,9 +1809,11 @@ elif seccion == "Clientes con probabilidad de fuga":
         "Ciclo": d["zona_nombre"],
         "Clase": d["clase_servicio_nombre"],
         "Tamaño": d["grupo_consumo"],
+        "Consumo promedio 6 meses (kWh/mes)": d["_consumo_6m"].round(0),
         "Factura promedio 6 meses ($/mes)": d["valor_en_riesgo_mes"].round(0),
         "Probabilidad de fuga (6 meses)": d["prob_fuga_6m"].map(prob_pct),
         "Riesgo": d["nivel_riesgo"],
+        "Consumo esperado en riesgo (kWh/mes)": d["_consumo_esperado_kwh"].round(0),
         "Pérdida esperada ($/mes)": d["valor_esperado_perdida_mes"].round(0),
         "Señales observadas": d["senales"].fillna(""),
         "Situación": d["estado_en_lista"].map(ESTADO_LISTA_SIMPLE).fillna("") if "estado_en_lista" in d.columns else "",
@@ -1552,12 +1821,14 @@ elif seccion == "Clientes con probabilidad de fuga":
     st.download_button("Descargar esta lista completa (CSV)", csv_es(t),
                        file_name=f"clientes_riesgo_de_irse_{corte_f}.csv", mime="text/csv")
     _t1000 = t.head(1000).reset_index(drop=True)
+    _c_prom = "Consumo promedio 6 meses (kWh/mes)" if es_consumo() else "Factura promedio 6 meses ($/mes)"
+    _c_esp = "Consumo esperado en riesgo (kWh/mes)" if es_consumo() else "Pérdida esperada ($/mes)"
     tabla_con_ficha(_t1000, "com_fuga",
-                    prioritarias=["Prioridad", "NIU", "Municipio", "Clase", "Tamaño", "Factura promedio 6 meses ($/mes)",
-                                  "Probabilidad de fuga (6 meses)", "Riesgo", "Pérdida esperada ($/mes)", "Señales observadas"],
-                    movil=["NIU", "Municipio", "Clase", "Riesgo", "Probabilidad de fuga (6 meses)", "Pérdida esperada ($/mes)", "Señales observadas"],
+                    prioritarias=["Prioridad", "NIU", "Municipio", "Clase", "Tamaño", _c_prom,
+                                  "Probabilidad de fuga (6 meses)", "Riesgo", _c_esp, "Señales observadas"],
+                    movil=["NIU", "Municipio", "Clase", "Riesgo", "Probabilidad de fuga (6 meses)", _c_esp, "Señales observadas"],
                     orden_claves={"Probabilidad de fuga (6 meses)": d["prob_fuga_6m"].head(1000).reset_index(drop=True)},
-                    que="clientes", destacada="Pérdida esperada ($/mes)")
+                    que="clientes", destacada=_c_esp)
     aviso("Con unos 80 clientes que se han ido, el modelo **no ordena mejor que listar a los clientes por tamaño** (consumo de 12 meses); "
           "en validación, de los 100 primeros se fueron 4. Es una lista de clientes grandes con señales para priorizar contactos, "
           "no una predicción de quién se va; la pérdida esperada es un orden de magnitud.", "limite")
@@ -1579,7 +1850,7 @@ elif seccion == "Clientes con probabilidad de fuga":
                 "Probabilidad (6 meses)": pd.to_numeric(vg.get("prob_fuga_6m"), errors="coerce").map(prob_pct),
             })
             tabla_con_ficha(tv.reset_index(drop=True), "com_vig",
-                            movil=["NIU", "Municipio", "Por qué está aquí", "Factura ($/mes)", "Probabilidad de fuga", "Probabilidad (6 meses)"],
+                            movil=["NIU", "Municipio", "Por qué está aquí", "Consumo promedio (kWh/mes)" if es_consumo() else "Factura ($/mes)", "Probabilidad de fuga", "Probabilidad (6 meses)"],
                             descarga=("Descargar grandes clientes (CSV)", f"grandes_clientes_no_regulados_{corte_f}.csv"), que="clientes",
                             orden_claves={"Probabilidad (6 meses)": pd.to_numeric(vg.get("prob_fuga_6m"), errors="coerce").reset_index(drop=True)})
     como_leer("El modelo mira cómo se comportaron los clientes que ya se fueron y busca los que hoy se parecen: "
@@ -1595,13 +1866,16 @@ elif seccion == "Clientes con probabilidad de fuga":
 
 
 elif seccion == "Caídas de consumo":
-    ui.titulo_pagina("Clientes cuya facturación está cayendo")
+    ui.titulo_pagina("Clientes cuyo consumo está cayendo")
     ger = cargar(R.gerencial, dtype={"NIU": "string", "ciclo_etiqueta": "string"})
     if ger is None:
         aviso("Todavía no hay lista de caída (paso 11 del pipeline).", "alerta")
         st.stop()
+    _col_op = col_medida("perdida_kwh_mes", "valor_riesgo_mes")
+    _col_vis = "Consumo que se pierde (kWh/mes)" if es_consumo() else "Facturación que se pierde ($/mes)"
     st.caption(f"Periodo facturado **{ui.mes_largo(corte_actual)}**. Clientes cuyo consumo bajó más de lo normal para clientes parecidos, "
-               "ordenados por la facturación que se está perdiendo cada mes.")
+               + ("ordenados por la energía que se está dejando de consumir cada mes (kWh)." if es_consumo() else
+                  "ordenados por la facturación que se está perdiendo cada mes (pesos, con la tarifa real de cada cliente)."))
     d = agregar_municipio(limpiar_lista(ger))
     lista_completa = d
     n_lista_caida = len(d)
@@ -1613,7 +1887,7 @@ elif seccion == "Caídas de consumo":
 
     def _cuantos() -> None:
         st.slider("Cuántos clientes incluir en la tabla y en la descarga", 25, 2000, step=25, key="gc_n",
-                  help="La lista va de mayor a menor facturación perdida; aquí se elige hasta qué puesto llega.")
+                  help="La lista va de mayor a menor pérdida (en la medida elegida: consumo o facturación); aquí se elige hasta qué puesto llega.")
 
     _zonas = filtro_zona_opciones(d)
     v = filtros("com_caida", [
@@ -1649,19 +1923,20 @@ elif seccion == "Caídas de consumo":
     if ten and "trayectoria" in d.columns:
         d = d[d["trayectoria"].isin(ten)]
     n = int(st.session_state["gc_n"])
-    # Orden: primero lo que hay que gestionar, luego vigilar; dentro de cada grupo por facturación perdida
+    # Orden: primero lo que hay que gestionar, luego vigilar; dentro de cada grupo por la pérdida en la medida elegida
     d = d.assign(_pri=d["prioridad_gestion"].map(ORDEN_PRIORIDAD).fillna(0))
-    d = d.sort_values(["_pri", "valor_riesgo_mes"], ascending=[True, False])
+    d = d.sort_values(["_pri", _col_op], ascending=[True, False])
     top = d.head(n)
     if len(d) == 0:
         aviso("Ningún cliente cumple estos filtros. Prueba a quitar alguno: por ejemplo, las caídas que llevan meses así están en la "
               "prioridad *Seguimiento*, no en *Gestionar*.")
     else:
         kpis([dict(titulo="Clientes (con los filtros)", valor=fmt_n(len(d)), tono="marca"),
-              dict(titulo="Facturación que se pierde", valor=pesos(d["valor_riesgo_mes"].sum()), unidad="/mes", tono="g"),
+              dict(titulo="Consumo que se pierde" if es_consumo() else "Facturación que se pierde", valor=fmt_medida(d[_col_op].sum()), unidad="/mes", tono="g",
+                   nota=(f"equivale a {pesos(d['valor_riesgo_mes'].sum())}/mes" if es_consumo() else f"equivale a {energia(d['perdida_kwh_mes'].sum())}/mes")),
               dict(titulo=f"Los {fmt_n(len(top))} primeros concentran",
-                   valor=f"{(top['valor_riesgo_mes'].sum() / d['valor_riesgo_mes'].sum() * 100 if d['valor_riesgo_mes'].sum() else 0):.0f} %",
-                   nota="de la facturación perdida con estos filtros")], columnas=3, clave="com_caida")
+                   valor=f"{(top[_col_op].sum() / d[_col_op].sum() * 100 if d[_col_op].sum() else 0):.0f} %",
+                   nota=("del consumo perdido con estos filtros" if es_consumo() else "de la facturación perdida con estos filtros"))], columnas=3, clave="com_caida")
         linea_conteo(len(top), len(d), n_lista_caida, n_evaluados_caida(), "clientes con caída", "en toda la lista de caída", "clientes evaluados por el detector")
         _caida_pct = caida_vs_referencia_pct(top).round(0)
         t = pd.DataFrame({
@@ -1676,7 +1951,9 @@ elif seccion == "Caídas de consumo":
             "Consumía (kWh/mes)": referencia_caida(top).round(0),
             "Consume ahora (kWh/mes)": top["consumo_reciente_kwh"].round(0),
             "Caída": _caida_pct.astype("Int64").astype(str) + " %",
+            "Consumo que se pierde (kWh/mes)": pd.to_numeric(top["perdida_kwh_mes"], errors="coerce").round(0),
             "Facturación que se pierde ($/mes)": top["valor_riesgo_mes"].round(0),
+            "Tarifa ($/kWh)": pd.to_numeric(top["tarifa_kwh"], errors="coerce").round(1) if "tarifa_kwh" in top.columns else np.nan,
             "Gravedad": top["gravedad"].map(SEVERIDAD_SIMPLE).fillna(top["gravedad"]),
             "Tendencia": top["trayectoria"].map(TRAYECTORIA_SIMPLE).fillna("—") if "trayectoria" in top.columns else "—",
             "Prioridad": top["prioridad_gestion"].map(PRIORIDAD_SIMPLE).fillna(top["prioridad_gestion"]) if "prioridad_gestion" in top.columns else "Gestionar",
@@ -1684,20 +1961,24 @@ elif seccion == "Caídas de consumo":
         })
         tabla_con_ficha(t.reset_index(drop=True), "com_caida",
                         prioritarias=["Puesto", "NIU", "Municipio", "Clase", "Consumía (kWh/mes)", "Consume ahora (kWh/mes)", "Caída",
-                                      "Facturación que se pierde ($/mes)", "Gravedad", "Tendencia"],
-                        movil=["NIU", "Municipio", "Facturación que se pierde ($/mes)", "Caída", "Gravedad", "Tendencia"],
+                                      _col_vis, "Gravedad", "Tendencia"],
+                        movil=["NIU", "Municipio", _col_vis, "Caída", "Gravedad", "Tendencia"],
                         orden_claves={"Caída": _caida_pct.reset_index(drop=True)},
                         descarga=("Descargar esta lista (CSV)", f"caidas_consumo_{corte_actual or ''}.csv"),
-                        que="clientes con caída", destacada="Facturación que se pierde ($/mes)")
+                        que="clientes con caída", destacada=_col_vis)
     with st.expander("Cuántos clientes hay por gravedad en cada zona regional (toda la lista)", expanded=not MOVIL):
         grafico_gravedad_por_zona(lista_completa, "caida_gravedad_zona")
     cs_av = cargar(R.cero_sostenido, dtype={"NIU": "string"})
     if cs_av is not None and len(cs_av):
-        aviso(f"Aparte hay **{fmt_n(len(cs_av))} clientes en cero o casi cero** desde hace 3 meses o más (facturaban "
-              f"{pesos(cs_av['valor_facturaba_antes_mes'].sum())}/mes). No están en esta lista porque ya no hay una caída que "
+        _cs_ref_av = pd.to_numeric(cs_av["consumo_referencia_kwh"] if "consumo_referencia_kwh" in cs_av.columns else cs_av.get("consumo_anterior_kwh"), errors="coerce")
+        aviso(f"Aparte hay **{fmt_n(len(cs_av))} clientes en cero o casi cero** desde hace 3 meses o más ("
+              + (f"consumían {energia(_cs_ref_av.sum())}/mes" if es_consumo() else f"facturaban {pesos(cs_av['valor_facturaba_antes_mes'].sum())}/mes")
+              + "). No están en esta lista porque ya no hay una caída que "
               "revisar; se listan en la sección **Clientes sin consumo** para decidir qué hacer con ellos.", "info")
     como_leer("**Consumía** es el nivel con el que se midió la pérdida: en una caída reciente, el menor entre el periodo anterior y el mismo "
-              "periodo del año pasado (para no exagerar la pérdida); en una caída que lleva meses, el del año pasado. **Gravedad**: qué tan fuera "
+              "periodo del año pasado (para no exagerar la pérdida); en una caída que lleva meses, el del año pasado. **Consumo que se pierde** = "
+              "consumía − consume ahora, en kWh por mes. **Facturación que se pierde** = ese consumo × la **tarifa** del cliente ($/kWh, la que "
+              "trae el TC2 en su mes de referencia; cambia cada mes). **Gravedad**: qué tan fuera "
               "de lo normal es la caída. **Tendencia**: lo que el modelo espera para el mes que viene. "
               "Sin autogeneradores ni área común, autoconsumos EBSA, distritos de riego y provisionales.", "Cómo leer las columnas")
 
@@ -1732,14 +2013,22 @@ elif seccion == "Clientes sin consumo":
         })
         _ref = pd.to_numeric(cs["consumo_referencia_kwh"] if "consumo_referencia_kwh" in cs.columns else cs["consumo_anterior_kwh"], errors="coerce")
         cs["_tamano"] = np.select([_ref >= 5000, _ref >= 500], ["Grande", "Mediano"], default="Pequeño")
+        cs["_ref_kwh"] = _ref
+        _col_cs = col_medida("_ref_kwh", "valor_facturaba_antes_mes")
+        _col_cs_vis = "Consumía antes (kWh/mes)" if es_consumo() else "Facturaba antes ($/mes)"
         kpis([dict(titulo="Clientes sin consumo", valor=fmt_n(len(cs)), tono="marca"),
               dict(titulo="En cero", valor=fmt_n(int((cs["_situacion"] == "En cero").sum()))),
               dict(titulo="Casi cero", valor=fmt_n(int((cs["_situacion"] == "Casi cero").sum())),
                    ayuda="Consumen algo, pero ningún mes de la ventana pasa de 10 kWh ni del 5 % de lo que consumían."),
-              dict(titulo="Facturaban antes", valor=pesos(cs["valor_facturaba_antes_mes"].sum()), unidad="/mes", tono="g")], clave="com_cero")
+              dict(titulo="Consumían antes" if es_consumo() else "Facturaban antes", valor=fmt_medida(cs[_col_cs].sum()), unidad="/mes", tono="g",
+                   nota=(f"equivale a {pesos(cs['valor_facturaba_antes_mes'].sum())}/mes" if es_consumo() else f"equivale a {energia(_ref.sum())}/mes"))], clave="com_cero")
         with tarjeta("Cuántos hay según el tiempo que llevan sin consumo", clave="cs_tiempo", plegable=True):
             _orden_t = ["Hasta 6 meses", "7 a 12 meses", "Más de 12 meses"]
-            _res = cs.groupby("_tramo_meses").agg(**{"Clientes": ("NIU", "size"), "Facturaban antes ($/mes)": ("valor_facturaba_antes_mes", "sum")}).reindex(_orden_t).fillna(0)
+            _res = cs.groupby("_tramo_meses").agg(**{"Clientes": ("NIU", "size"), "Consumían antes (kWh/mes)": ("_ref_kwh", "sum"),
+                                                     "Facturaban antes ($/mes)": ("valor_facturaba_antes_mes", "sum")}).reindex(_orden_t).fillna(0)
+            _res["Consumían antes (kWh/mes)"] = _res["Consumían antes (kWh/mes)"].round(0)
+            if not es_consumo():
+                _res = _res[["Clientes", "Facturaban antes ($/mes)", "Consumían antes (kWh/mes)"]]
             _res.insert(0, "Qué hacer (sugerido)", [cs.loc[cs["_tramo_meses"] == x, "_que_hacer"].iloc[0] if (cs["_tramo_meses"] == x).any() else "—" for x in _orden_t])
             _res["Clientes"] = _res["Clientes"].astype(int)
             c1, c2 = st.columns([2, 3])
@@ -1769,7 +2058,7 @@ elif seccion == "Clientes sin consumo":
             dcs = dcs[dcs["_tramo_meses"].isin(tie_cs)]
         if tam_cs:
             dcs = dcs[dcs["_tamano"].isin(tam_cs)]
-        dcs = dcs.sort_values("valor_facturaba_antes_mes", ascending=False, na_position="last")
+        dcs = dcs.sort_values(_col_cs, ascending=False, na_position="last")
         tcs = pd.DataFrame({
             "NIU": dcs["NIU"], "Municipio": dcs["municipio"] if "municipio" in dcs.columns else "—",
             "Zona regional": dcs["zona_regional"], "Clase": nombre_clase(dcs["clase_servicio"]) if "clase_servicio" in dcs.columns else "—",
@@ -1778,6 +2067,7 @@ elif seccion == "Clientes sin consumo":
             "Consumía antes (kWh/mes)": (dcs["consumo_referencia_kwh"] if "consumo_referencia_kwh" in dcs.columns else dcs["consumo_anterior_kwh"]).round(0),
             "Consume ahora (kWh/mes)": pd.to_numeric(dcs["consumo_reciente_kwh"], errors="coerce").round(1) if "consumo_reciente_kwh" in dcs.columns else 0,
             "Facturaba antes ($/mes)": dcs["valor_facturaba_antes_mes"].round(0),
+            "Tarifa ($/kWh)": pd.to_numeric(dcs["tarifa_kwh"], errors="coerce").round(1) if "tarifa_kwh" in dcs.columns else np.nan,
             "Último mes con consumo": dcs["ultimo_mes_con_consumo"].fillna("sin consumo en la serie") if "ultimo_mes_con_consumo" in dcs.columns else "—",
             "Meses sin consumo": dcs["_meses"].astype("Int64"),
             "Qué hacer (sugerido)": dcs["_que_hacer"],
@@ -1786,9 +2076,9 @@ elif seccion == "Clientes sin consumo":
         tabla_con_ficha(tcs.reset_index(drop=True), "com_cero",
                         prioritarias=["NIU", "Municipio", "Clase", "Tamaño", "Situación", "Consumía antes (kWh/mes)", "Facturaba antes ($/mes)",
                                       "Último mes con consumo", "Meses sin consumo", "Qué hacer (sugerido)"],
-                        movil=["NIU", "Municipio", "Situación", "Facturaba antes ($/mes)", "Meses sin consumo", "Qué hacer (sugerido)"],
+                        movil=["NIU", "Municipio", "Situación", _col_cs_vis, "Meses sin consumo", "Qué hacer (sugerido)"],
                         descarga=("Descargar clientes sin consumo (CSV)", f"clientes_sin_consumo_{corte_actual or ''}.csv"),
-                        que="clientes sin consumo", destacada="Facturaba antes ($/mes)")
+                        que="clientes sin consumo", destacada=_col_cs_vis)
         como_leer("Clientes que llevan toda su ventana reciente (3 meses los de lectura mensual, 6 los rurales de lectura trimestral) "
                   "**en cero o casi cero**: ningún mes pasa de 10 kWh ni del 5 % de lo que consumían. No se cuentan como caída de consumo "
                   "(no hay una caída que una cuadrilla pueda revisar) y no suman a la facturación en riesgo, pero sí importan a comercial: "
@@ -1806,37 +2096,51 @@ elif seccion == "Clientes que ya se fueron":
     est = ya["estado"].value_counts()
     kpis([dict(titulo=k if len(k) < 30 else k[:28] + "…", valor=fmt_n(v), ayuda=ESTADO_OTRO_TEXTO.get(k, k),
                tono="alerta" if str(k).startswith("CON OTRO") else None) for k, v in est.items()], columnas=min(len(est), 4), clave="com_ya")
+    _kwh_antes = pd.to_numeric(ya.get("consumo_prom_6m_antes_salida_kwh"), errors="coerce")
     if "valor_facturado_antes_salida_mes" in ya.columns and ya["valor_facturado_antes_salida_mes"].notna().any():
-        st.markdown(f"Facturaban antes de irse **{pesos_md(ya['valor_facturado_antes_salida_mes'].sum())}/mes** "
-                    f"(sobre {fmt_n(int(ya['valor_facturado_antes_salida_mes'].notna().sum()))} clientes con historia en EBSA).")
+        if es_consumo():
+            st.markdown(f"Consumían antes de irse **{energia(_kwh_antes.sum())}/mes** "
+                        f"(sobre {fmt_n(int(_kwh_antes.notna().sum()))} clientes con historia en EBSA; "
+                        f"facturaban {pesos_md(ya['valor_facturado_antes_salida_mes'].sum())}/mes).")
+        else:
+            st.markdown(f"Facturaban antes de irse **{pesos_md(ya['valor_facturado_antes_salida_mes'].sum())}/mes** "
+                        f"(sobre {fmt_n(int(ya['valor_facturado_antes_salida_mes'].notna().sum()))} clientes con historia en EBSA; "
+                        f"consumían {energia(_kwh_antes.sum())}/mes).")
     d = agregar_municipio(ya) if "municipio" not in ya.columns else ya
+    # El nombre del comercializador que atiende hoy a cada cliente no se muestra ni se descarga (pedido de negocio, octubre 2026):
+    # se conservan los estados y los conteos.
     v = filtros("com_ya", [
         _campo("ya_est", "Estado", list(est.index), vacio="Todos"),
-        _campo("ya_com", "Comercializador", sorted(d["comercializador"].dropna().astype(str).unique()), vacio="Todos"),
+        _campo("ya_mun", "Municipio", sorted(d["municipio"].dropna().astype(str).unique()) if "municipio" in d.columns else None, vacio="Todos"),
     ], por_fila=2)
-    est_sel, com_sel = v.get("ya_est", []), v.get("ya_com", [])
+    est_sel, mun_sel = v.get("ya_est", []), v.get("ya_mun", [])
     if est_sel:
         d = d[d["estado"].isin(est_sel)]
-    if com_sel:
-        d = d[d["comercializador"].astype(str).isin(com_sel)]
+    if mun_sel:
+        d = d[d["municipio"].astype(str).isin(mun_sel)]
+    _c_antes = "Consumía antes (kWh/mes)" if es_consumo() else "Facturaba antes ($/mes)"
     t = pd.DataFrame({
-        "NIU": d["NIU"], "Estado": d["estado"], "Comercializador": d.get("comercializador", "—"),
+        "NIU": d["NIU"], "Estado": d["estado"],
         "Municipio": d.get("municipio", "—"), "Zona": d.get("zona_nombre", "—"), "Clase": d.get("clase_servicio_nombre", "—"),
         "Desde": d["primer_mes_otro"].astype(str).str[:7] if "primer_mes_otro" in d.columns else "—",
         "Mes de salida estimado": d["mes_salida"].astype(str).str[:7] if "mes_salida" in d.columns else "—",
         "Consumía antes (kWh/mes)": pd.to_numeric(d.get("consumo_prom_6m_antes_salida_kwh"), errors="coerce").round(0),
         "Facturaba antes ($/mes)": pd.to_numeric(d.get("valor_facturado_antes_salida_mes"), errors="coerce").round(0),
     })
+    if not es_consumo():
+        t = t[["NIU", "Estado", "Municipio", "Zona", "Clase", "Desde", "Mes de salida estimado", "Facturaba antes ($/mes)", "Consumía antes (kWh/mes)"]]
     tabla_con_ficha(t.reset_index(drop=True), "com_ya",
-                    movil=["NIU", "Estado", "Comercializador", "Municipio", "Desde", "Facturaba antes ($/mes)"],
-                    descarga=("Descargar (CSV)", "clientes_con_otro_comercializador.csv"), que="clientes")
+                    movil=["NIU", "Estado", "Municipio", "Desde", _c_antes],
+                    descarga=("Descargar (CSV)", "clientes_con_otro_comercializador.csv"), que="clientes", destacada=_c_antes)
     pi = cargar(R.fuga_perfil_idos)
     if pi is not None:
-        with st.expander("Cómo son los que se fueron (clase, zona, tamaño, comercializador, municipio)"):
+        pi = pi[~pi["dimension"].astype(str).str.lower().str.contains("comercializador")].reset_index(drop=True)
+        with st.expander("Cómo son los que se fueron (clase, zona, tamaño, municipio)"):
             for dim, tt in pi.groupby("dimension", sort=False):
                 st.markdown(f"**{dim}**")
                 tabla(tt.drop(columns=["dimension"]).head(15), clave=f"ya_perfil_{dim}", hide_index=True)
-    st.caption("Sirve para saber a quién ya no vale la pena buscar, cuánto facturaban y cómo eran, para reconocer a los que se parecen. "
+    st.caption("Sirve para saber a quién ya no vale la pena buscar, cuánto consumían y cómo eran, para reconocer a los que se parecen. "
+               "Por política de la empresa no se muestra qué comercializador atiende hoy a cada cliente. "
                "Los clientes en cero o casi cero (que siguen conectados pero ya no consumen) están en la sección *Clientes sin consumo*.")
 
 
@@ -1856,7 +2160,8 @@ elif seccion == "Proyección de consumo (compra de energía)":
                    "regional, y su **proyección** con un modelo clásico de series de tiempo (Holt-Winters o SARIMA, el que menos error tuvo "
                    "en el backtest de cada zona). Las bandas muestran dónde cae el 80 % y el 95 % de los escenarios del modelo.")
     else:
-        st.caption(f"Consumo mensual **real** de todos los clientes hasta **{ultimo_real}**, por zona regional y total, y su **proyección** a tres años. "
+        st.caption(f"Consumo mensual **real** de todos los clientes hasta **{ultimo_real}**, por zona regional y total, y su **proyección** "
+                   "(por defecto a un año, que es el horizonte verificado). "
                    "Las bandas muestran el rango en el que se espera que caiga el consumo (80 % y 95 % de probabilidad).")
 
     zonas = [z for z in pa["zona_regional"].unique()]
@@ -1867,7 +2172,15 @@ elif seccion == "Proyección de consumo (compra de energía)":
     if "escenario" not in pa.columns:
         pa["escenario"] = "BASE"
     with tarjeta(clave="proy_sel"):
-        zona_sel = st.selectbox("Zona", zonas, key="proy_zona")
+        c_z, c_h = st.columns([1, 1]) if not MOVIL else (st.container(), st.container())
+        zona_sel = c_z.selectbox("Zona", zonas, key="proy_zona")
+        _opciones_h = list(HORIZONTES_PROY)
+        _h_act = horizonte_meses()
+        _idx_h = next((i for i, k in enumerate(_opciones_h) if HORIZONTES_PROY[k] == _h_act), 0)
+        c_h.radio("Horizonte que se muestra", _opciones_h, index=_idx_h, horizontal=not MOVIL, key="proy_horizonte_w",
+                  on_change=_fijar_horizonte, args=("proy_horizonte_w",),
+                  help="El modelo calcula 36 meses; por pedido de negocio se presenta un año, que es el horizonte probado contra el pasado "
+                       "(backtest). Los meses y años que no se muestran siguen en los archivos descargables y no cambian.")
         e = pe[pe["zona_regional"] == zona_sel].iloc[0]
         hay_tend = bool((pm["zona_regional"].eq(zona_sel) & pm["escenario"].eq("ALTERNATIVO")).any())
         esc_sel = "BASE"
@@ -1906,8 +2219,12 @@ elif seccion == "Proyección de consumo (compra de energía)":
                    + ("" if bool(e.get("supera_linea_base", True)) else " · ⚠ el modelo no supera la línea base estacional en esta zona"))
 
     d = pm[(pm["zona_regional"] == zona_sel) & (pm["escenario"] == esc_sel)].sort_values("periodo").copy()
+    _h = horizonte_meses()
+    d, _pa_h, _ult_h, _fin_h, _fuera_h = recortar_proyeccion(d, pa[(pa["zona_regional"] == zona_sel) & (pa["escenario"] == esc_sel)], _h)
     d["mes"] = d["periodo"].dt.strftime("%Y-%m")
-    with tarjeta("Consumo mes a mes y proyección (GWh)", clave="proy_chart"):
+    with tarjeta("Consumo mes a mes y proyección (GWh)",
+                 (f"Proyección a {_h} meses desde {ui.mes_largo(str(_ult_h)[:7])} (hasta {ui.mes_largo(str(_fin_h)[:7])})" if _h and _ult_h is not None else "Todo el horizonte calculado por el modelo"),
+                 clave="proy_chart"):
         ui.registrar("grafico", "proy_mensual", [(str(a), str(b), None if pd.isna(c) else round(float(c), 4), None if pd.isna(p_) else round(float(p_), 4))
                                                   for a, b, c, p_ in zip(d["mes"], d["tipo"], d["real_gwh"], d["proyeccion_gwh"])])
         try:
@@ -1946,8 +2263,8 @@ elif seccion == "Proyección de consumo (compra de energía)":
         ui.pie("Azul: consumo real consolidado. Naranja punteado: proyección del modelo; sombreado: bandas del 80 % y 95 %. "
                "Los meses rurales pendientes de lectura no se incluyen como reales.")
 
-    # ----- Tabla anual -----
-    a = pa[(pa["zona_regional"] == zona_sel) & (pa["escenario"] == esc_sel)].sort_values("anio").copy()
+    # ----- Tabla anual (solo los años cuya proyección cabe completa en el horizonte mostrado) -----
+    a = _pa_h.sort_values("anio").copy()
     # La etiqueta se recalcula con el error del modelo de ESTE escenario (archivos generados antes del 2026-10-09 le
     # ponían al escenario alternativo la etiqueta del base: un año con 10 % de error salía CONFIABLE).
     _err = pd.to_numeric(a["error_backtest_pct"], errors="coerce")
@@ -1987,7 +2304,9 @@ elif seccion == "Proyección de consumo (compra de energía)":
             msg += f" No verificables con la historia disponible: {', '.join(map(str, nover))}."
         st.markdown(msg)
         st.caption("La banda anual suma las bandas mensuales, por eso es conservadora (más ancha que la del año como un todo). "
-                   "El año en curso combina meses reales y proyectados.")
+                   "El año en curso combina meses reales y proyectados."
+                   + (f" Los años {', '.join(map(str, _fuera_h))} no se muestran porque su proyección va más allá del horizonte elegido "
+                      "(elige *Todo lo calculado* para verlos; son extrapolación del modelo, no horizonte verificado)." if _fuera_h else ""))
     aviso(f"**Cuántos años se pueden usar.** Un año se marca **CONFIABLE** cuando el error del modelo en el backtest (lo que se equivocó "
           f"pronosticando el pasado a ese horizonte) es ≤ {umbral:.0f} %; **ORIENTATIVO** si fue mayor; **NO VERIFICABLE** cuando la historia "
           "disponible (52 meses) no alcanza para probar ese horizonte, así que es extrapolación de tendencia y estacionalidad. "
@@ -2015,16 +2334,17 @@ elif seccion == "Proyección de consumo (compra de energía)":
 
     # ----- Todas las zonas, resumen -----
     with st.expander("Resumen de todas las zonas por año"):
-        anios_p = sorted(pa.loc[pa["meses_proyectados"] > 0, "anio"].unique())
-        pa_b = pa[pa["escenario"] == "BASE"]
+        pa_h_all = pa[~pa["anio"].astype(int).isin(_fuera_h)] if _fuera_h else pa
+        anios_p = sorted(pa_h_all.loc[pa_h_all["meses_proyectados"] > 0, "anio"].unique())
+        pa_b = pa_h_all[pa_h_all["escenario"] == "BASE"]
         piv = pa_b.pivot_table(index="zona_regional", columns="anio", values="total_gwh", aggfunc="sum").round(1)
         piv = piv.reindex([z for z in zonas if z in piv.index])
         piv.columns = [str(c) for c in piv.columns]
         piv_txt = piv.map(lambda v: "" if pd.isna(v) else fmt_n(v, 1)) if hasattr(piv, "map") else piv.applymap(lambda v: "" if pd.isna(v) else fmt_n(v, 1))
         ui.tabla_simple(piv_txt, clave="proy_piv")
         st.caption("GWh por año calendario (real + proyección, escenario base). Los años " + ", ".join(map(str, anios_p)) + " incluyen meses proyectados.")
-        if (pa["escenario"] == "ALTERNATIVO").any():
-            piv_t = pa[pa["escenario"] == "ALTERNATIVO"].pivot_table(index="zona_regional", columns="anio", values="total_gwh", aggfunc="sum").round(1)
+        if (pa_h_all["escenario"] == "ALTERNATIVO").any():
+            piv_t = pa_h_all[pa_h_all["escenario"] == "ALTERNATIVO"].pivot_table(index="zona_regional", columns="anio", values="total_gwh", aggfunc="sum").round(1)
             piv_t = piv_t.reindex([z for z in zonas if z in piv_t.index]); piv_t.columns = [str(c) for c in piv_t.columns]
             st.markdown("**Escenario alternativo (GWh por año)**")
             ui.tabla_simple(piv_t.map(lambda v: "" if pd.isna(v) else fmt_n(v, 1)) if hasattr(piv_t, "map") else piv_t.applymap(lambda v: "" if pd.isna(v) else fmt_n(v, 1)), clave="proy_piv_alt")
@@ -2266,25 +2586,28 @@ elif seccion == "Resumen":
 
     with tarjeta("Dónde está el valor: zonas regionales",
                  "Zona regional = ciclo urbano + rural + seccionales de una misma dirección regional (quien decide las acciones en terreno)", clave="res_zonas"):
+        _col_res = col_medida("kwh_mes", "valor_riesgo_mes")
         rz = g.groupby("zona_regional").agg(clientes=("NIU", "size"), criticos=("severidad", lambda x: int(x.eq("CRITICA").sum())),
                                             kwh_mes=("perdida_kwh_mes", "sum"), valor_riesgo_mes=("valor_riesgo_mes", "sum")).reset_index()
-        rz = rz.sort_values("valor_riesgo_mes", ascending=False)
+        rz["kwh_mes"] = rz["kwh_mes"].round(0)
+        rz = rz.sort_values(_col_res, ascending=False)
         c1, c2 = st.columns([1, 1])
         with c1:
-            ui.barras(rz.set_index("zona_regional")["valor_riesgo_mes"], formato=ui.pesos_millones, color=AZUL,
-                      nombre_valor="Valor en riesgo / mes", nombre_categoria="Zona regional", clave="res_zonas")
+            ui.barras(rz.set_index("zona_regional")[_col_res], formato=fmt_medida_corto, color=AZUL,
+                      nombre_valor="kWh en riesgo / mes" if es_consumo() else "Valor en riesgo / mes", nombre_categoria="Zona regional", clave="res_zonas")
         with c2:
             tabla(rz, clave="res_rz", hide_index=True)
 
     rc = cargar(R.resumen_ciclo, dtype={"ciclo_etiqueta": "string"})
     if rc is not None:
         with tarjeta("Dónde está el valor: ciclos de lectura", clave="res_ciclos", plegable=True):
-            rc = rc.sort_values("valor_riesgo_mes", ascending=False)
+            _col_rc = "kwh_riesgo_mes" if es_consumo() and "kwh_riesgo_mes" in rc.columns else "valor_riesgo_mes"
+            rc = rc.sort_values(_col_rc, ascending=False)
             rc.insert(1, "zona_nombre", rc["ciclo_etiqueta"].map(etiqueta_ciclo))
             c1, c2 = st.columns([1, 1])
             with c1:
-                ui.barras(rc.set_index("zona_nombre")["valor_riesgo_mes"], formato=ui.pesos_millones, color=AZUL,
-                          nombre_valor="Valor en riesgo / mes", nombre_categoria="Ciclo", clave="res_ciclos", alto_fila=26, max_etiqueta=230)
+                ui.barras(rc.set_index("zona_nombre")[_col_rc], formato=fmt_medida_corto if _col_rc == "kwh_riesgo_mes" else ui.pesos_millones, color=AZUL,
+                          nombre_valor="kWh en riesgo / mes" if _col_rc == "kwh_riesgo_mes" else "Valor en riesgo / mes", nombre_categoria="Ciclo", clave="res_ciclos", alto_fila=26, max_etiqueta=230)
             with c2:
                 tabla(rc, clave="res_rc", hide_index=True, height=min(38 * (len(rc) + 1) + 3, 520))
 
@@ -2384,8 +2707,9 @@ elif seccion == "Gestión por ciclo":
 # Ranking gerencial
 # ----------------------------------------------------------------------------
 elif seccion == "Ranking gerencial":
-    ui.titulo_pagina("Ranking por valor en riesgo")
+    ui.titulo_pagina("Ranking por consumo en riesgo" if es_consumo() else "Ranking por valor en riesgo")
     ger = cargar(R.gerencial, dtype={"NIU": "string", "ciclo_etiqueta": "string"})
+    _col_rk = col_medida("perdida_kwh_mes", "valor_riesgo_mes")
     if ger is None:
         aviso("No existe la lista gerencial.", "alerta")
         st.stop()
@@ -2417,14 +2741,16 @@ elif seccion == "Ranking gerencial":
         d = d[d[col_clase].astype(str).isin(clase)]
     if mun:
         d = d[d["municipio"].astype(str).isin(mun)]
-    total = d["valor_riesgo_mes"].sum()
+    total = d[_col_rk].sum()
     if "prioridad_gestion" in d.columns:
         d = d.assign(_pri=d["prioridad_gestion"].map(ORDEN_PRIORIDAD).fillna(0))
-        d = d.sort_values(["_pri", "valor_riesgo_mes"], ascending=[True, False])
+        d = d.sort_values(["_pri", _col_rk], ascending=[True, False])
+    else:
+        d = d.sort_values(_col_rk, ascending=False)
     top = d.head(n)
-    kpis([dict(titulo=f"Los {fmt_n(len(top))} primeros concentran", valor=pesos(top["valor_riesgo_mes"].sum()), unidad="/mes", tono="g"),
-          dict(titulo="Parte del valor filtrado", valor=f"{(top['valor_riesgo_mes'].sum() / total * 100 if total else 0):.1f}%", tono="marca"),
-          dict(titulo="Valor filtrado", valor=pesos(total), unidad="/mes", nota=f"sobre {fmt_n(len(d))} clientes")], columnas=3, compacto=True, clave="adm_rank")
+    kpis([dict(titulo=f"Los {fmt_n(len(top))} primeros concentran", valor=fmt_medida(top[_col_rk].sum()), unidad="/mes", tono="g"),
+          dict(titulo="Parte del total filtrado", valor=f"{(top[_col_rk].sum() / total * 100 if total else 0):.1f}%", tono="marca"),
+          dict(titulo="Consumo filtrado" if es_consumo() else "Valor filtrado", valor=fmt_medida(total), unidad="/mes", nota=f"sobre {fmt_n(len(d))} clientes")], columnas=3, compacto=True, clave="adm_rank")
     linea_conteo(len(top), len(d), len(ger), n_evaluados_caida(), "clientes de la lista", "en toda la lista de caída", "clientes evaluados por el detector")
     cols = [c for c in ["ranking", "NIU", "ciclo_etiqueta", "municipio", "zona_regional", "zona_nombre", "clase_servicio_nombre", "estrato", "grupo_consumo",
                         "cluster_id", "severidad", "trayectoria", "estado_en_lista",
@@ -2433,11 +2759,13 @@ elif seccion == "Ranking gerencial":
                         "tipo_medidor_nombre", "tipo_lectura_nombre"] if c in top.columns]
     tabla_con_ficha(top[cols].reset_index(drop=True), "adm_rank", "Administrador del modelo",
                     prioritarias=["ranking", "NIU", "municipio", "zona_regional", "clase_servicio_nombre", "grupo_consumo", "severidad", "trayectoria",
-                                  "consumo_anterior_kwh", "consumo_reciente_kwh", "valor_riesgo_mes"],
-                    movil=["ranking", "NIU", "municipio", "severidad", "trayectoria", "valor_riesgo_mes"],
-                    descarga=("Descargar (CSV)", f"ranking_gerencial_{corte_actual or ''}.csv"), que="clientes", destacada="valor_riesgo_mes")
+                                  "consumo_anterior_kwh", "consumo_reciente_kwh", _col_rk],
+                    movil=["ranking", "NIU", "municipio", "severidad", "trayectoria", _col_rk],
+                    descarga=("Descargar (CSV)", f"ranking_gerencial_{corte_actual or ''}.csv"), que="clientes", destacada=_col_rk)
     st.caption("Sin autogeneradores ni las clases área común, autoconsumos EBSA, distritos de riego y provisionales (regla de negocio). "
-               "El filtro de zona usa la zona regional: ciclo urbano, rural y seccionales juntos.")
+               "El filtro de zona usa la zona regional: ciclo urbano, rural y seccionales juntos. "
+               + ("La columna **ranking** es el puesto original del archivo (por valor en pesos); aquí la lista va ordenada por kWh perdidos." if es_consumo() else "")
+               + (" Los clientes del mercado no regulado (ciclo 33) se cuentan en la zona regional de su municipio." if "zona_regional_asignada_por_municipio" in ger.columns and ger["zona_regional_asignada_por_municipio"].any() else ""))
 
 
 # ----------------------------------------------------------------------------
@@ -2544,28 +2872,32 @@ elif seccion == "Riesgo de fuga":
                 st.markdown(f"Facturaban antes de irse (solo con tarifa real): "
                             f"**{pesos_md(ya['valor_facturado_antes_salida_mes'].sum())}/mes** "
                             f"sobre {fmt_n(int(ya['valor_facturado_antes_salida_mes'].notna().sum()))} clientes con historia TC2.")
+            # Sin el nombre del comercializador ni el del titular (pedido de negocio, octubre 2026): quedan estados y conteos
             v = filtros("adm_fuga_ya", [
                 _campo("fya_est", "Estado", list(est.index), vacio="Todos"),
-                _campo("fya_com", "Comercializador", sorted(ya["comercializador"].dropna().astype(str).unique()), vacio="Todos"),
+                _campo("fya_mun", "Municipio", sorted(ya["municipio"].dropna().astype(str).unique()) if "municipio" in ya.columns else None, vacio="Todos"),
             ], por_fila=2)
-            est_sel, com_sel = v.get("fya_est", []), v.get("fya_com", [])
+            est_sel, mun_sel = v.get("fya_est", []), v.get("fya_mun", [])
             d = ya
             if est_sel:
                 d = d[d["estado"].isin(est_sel)]
-            if com_sel:
-                d = d[d["comercializador"].astype(str).isin(com_sel)]
-            cols = [c for c in ["NIU", "estado", "comercializador", "municipio", "usuario", "primer_mes_otro", "ultimo_mes_otro",
+            if mun_sel:
+                d = d[d["municipio"].astype(str).isin(mun_sel)]
+            cols = [c for c in ["NIU", "estado", "municipio", "primer_mes_otro", "ultimo_mes_otro",
                                 "mes_salida", "fuente_salida", "zona_nombre", "clase_servicio_nombre", "estrato",
                                 "consumo_prom_6m_antes_salida_kwh", "consumo_prom_otro_kwh", "tarifa_kwh",
                                 "valor_facturado_antes_salida_mes", "nivel_tension"] if c in d.columns]
             tabla_pro(d[cols], "adm_fuga_ya",
-                      prioritarias=["NIU", "estado", "comercializador", "municipio", "primer_mes_otro", "mes_salida", "clase_servicio_nombre",
+                      prioritarias=["NIU", "estado", "municipio", "primer_mes_otro", "mes_salida", "clase_servicio_nombre",
                                     "consumo_prom_6m_antes_salida_kwh", "valor_facturado_antes_salida_mes"],
-                      movil=["NIU", "estado", "comercializador", "municipio", "mes_salida", "valor_facturado_antes_salida_mes"],
+                      movil=["NIU", "estado", "municipio", "mes_salida", "consumo_prom_6m_antes_salida_kwh"],
                       descarga=("Descargar (CSV)", f"clientes_con_otro_comercializador_{corte_f}.csv"), que="clientes")
+            st.caption("Por política de la empresa no se muestra ni se descarga el nombre del comercializador que atiende hoy a cada cliente ni el del titular; "
+                       "el archivo original en 00_otros_comercializadores no se modifica.")
             pi = cargar(R.fuga_perfil_idos)
             if pi is not None:
-                with st.expander("Perfil de los que se fueron (clase, zona, tamaño, comercializador, municipio)"):
+                pi = pi[~pi["dimension"].astype(str).str.lower().str.contains("comercializador")].reset_index(drop=True)
+                with st.expander("Perfil de los que se fueron (clase, zona, tamaño, municipio)"):
                     for dim, t in pi.groupby("dimension", sort=False):
                         st.markdown(f"**{dim}**")
                         tabla(t.drop(columns=["dimension"]).head(15), clave=f"fuga_perfil_{dim}", hide_index=True)
@@ -2794,7 +3126,8 @@ elif seccion == "Buscar cliente":
                 kpis([_kpi_texto("Municipio", str(u.get("municipio", "—"))),
                       _kpi_texto("Provincia", str(u.get("provincia", "—"))),
                       _kpi_texto("Zona (mapa)", str(u.get("zona_mapa", "—")) if pd.notna(u.get("zona_mapa", np.nan)) else "—"),
-                      _kpi_texto("Nivel de tensión", str(u.get("nivel_tension", "—")))], compacto=True, clave="bc_ubic")
+                      _kpi_texto("Nivel de tensión (TC1)", str(u.get("nivel_tension", "—")), ayuda=AYUDA_NIVEL_TENSION)], compacto=True, clave="bc_ubic")
+                st.caption(f"Nivel de tensión según el TC1 (corte {_periodo_tc1()}): puede estar desactualizado tras ampliaciones de carga; no interviene en ningún cálculo.")
                 _dir = ui.enmascarar(u.get("direccion", "—")) if ui.ocultar_identificadores() else u.get("direccion", "—")
                 st.markdown(f"Dirección: **{_dir}** · circuito **{u.get('circuito', '—')}** · "
                             f"transformador **{u.get('transformador', '—')}** · altitud **{fmt_n(u.get('altitud', np.nan))} m**"
@@ -2802,7 +3135,9 @@ elif seccion == "Buscar cliente":
                             f"Dirección: **{_dir}** · circuito **{u.get('circuito', '—')}** · transformador **{u.get('transformador', '—')}**")
                 if _si(u.get("coordenadas_validas", False)) and not ui.ocultar_identificadores():
                     with st.expander("Ver en el mapa (el fondo necesita internet)", expanded=not MOVIL):
-                        st.map(pd.DataFrame({"lat": [float(u["latitud"])], "lon": [float(u["longitud"])]}), zoom=12, height=260, **ui.ANCHO)
+                        # (corrección 2026-10-19) sin **ui.ANCHO: st.map solo acepta width="stretch" desde Streamlit 1.52; en 1.50 y 1.51
+                        # fallaba con TypeError ('str' object cannot be interpreted as an integer). Por defecto ya ocupa todo el ancho.
+                        st.map(pd.DataFrame({"lat": [float(u["latitud"])], "lon": [float(u["longitud"])]}), zoom=12, height=260)
                 elif not _si(u.get("coordenadas_validas", False)):
                     st.caption("Sin coordenadas válidas en el TC1.")
             else:
@@ -2869,7 +3204,7 @@ elif seccion == "Buscar cliente":
             if len(yz):
                 y = yz.iloc[0]
                 aviso(f"Este cliente está en el archivo de otros comercializadores: **{y['estado']}** · "
-                      f"{y.get('comercializador', '—')} · desde {str(y.get('primer_mes_otro', ''))[:7]} · "
+                      f"desde {str(y.get('primer_mes_otro', ''))[:7]} · "
                       f"mes de salida estimado {str(y.get('mes_salida', ''))[:7]} ({y.get('fuente_salida', '')}).", "alerta")
             elif len(fz):
                 z = fz.iloc[0]

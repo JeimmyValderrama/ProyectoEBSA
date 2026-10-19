@@ -852,13 +852,18 @@ def formato_tabla(df: pd.DataFrame, cfg: dict | None = None):
             n = str(c).lower()
             if "pct" in n or "prob" in n or n in ("ranking", "puesto", "orden", "orden_en_ciclo", "estrato", "prioridad"):
                 continue
-            if any(p in n for p in COLUMNAS_PESOS_PISTAS):
-                d[c] = df[c].map(lambda v: "" if pd.isna(v) else "$" + fmt_n(v))
-                cfg[c] = st.column_config.TextColumn(c, help="Pesos por mes")
-            elif any(p in n for p in COLUMNAS_KWH_PISTAS):
+            if "tarifa" in n:
+                # tarifa aplicada ($/kWh): con un decimal, no es un valor mensual
+                d[c] = df[c].map(lambda v: "" if pd.isna(v) else "$" + fmt_n(v, 1))
+                cfg[c] = st.column_config.TextColumn(c, help="Pesos por kWh (tarifa aplicada, último valor real del cliente en el TC2)")
+            elif any(p in n for p in COLUMNAS_KWH_PISTAS) and "$" not in n:
+                # (2026-10-19) las columnas de energía se reconocen antes que las de pesos: perdida_kwh_mes es kWh, no $
                 dec = 0 if (df[c].dropna() % 1 == 0).all() else 1
                 d[c] = df[c].map(lambda v, dec=dec: "" if pd.isna(v) else fmt_n(v, dec))
-                cfg[c] = st.column_config.TextColumn(c)
+                cfg[c] = st.column_config.TextColumn(c, help="kWh por mes")
+            elif any(p in n for p in COLUMNAS_PESOS_PISTAS):
+                d[c] = df[c].map(lambda v: "" if pd.isna(v) else "$" + fmt_n(v))
+                cfg[c] = st.column_config.TextColumn(c, help="Pesos por mes")
     except Exception:
         d, cfg = df, (cfg or None)
     return d, (cfg or None)
