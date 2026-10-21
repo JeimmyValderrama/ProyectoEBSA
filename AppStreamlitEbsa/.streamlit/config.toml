@@ -1,0 +1,8 @@
+# Configuración de la página (Streamlit la lee desde la carpeta donde se lanza: Pipeline_Ebsa)
+[server]
+# Los formato_tc2 mensuales pesan ~120 MB; el límite por defecto de subida es 200 MB.
+maxUploadSize = 1000
+
+[client]
+# Oculta el botón "Deploy" y el menú de desarrollo de Streamlit: quien usa la página no los necesita.
+toolbarMode = "viewer"

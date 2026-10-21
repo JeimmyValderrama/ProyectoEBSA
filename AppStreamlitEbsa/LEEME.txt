@@ -1,13 +1,39 @@
-EBSA - Consumo de clientes: pagina para consulta (sin pipeline)
-=================================================================
+EBSA - Consumo de clientes: paginas para consulta (sin pipeline)
+====================================================================
+Proyecto academico (Especializacion en Analitica Estrategica de Datos, UPTC). No es un producto oficial de EBSA.
+
+Esta carpeta trae DOS versiones de la misma pagina. Muestran las mismas cifras; cambia la presentacion.
+    INICIAR_APP.bat      pagina original           -> http://localhost:8501
+    INICIAR_APP_V2.bat   pagina con interfaz nueva -> http://localhost:8502
+Se pueden abrir las dos al tiempo (cada una en su ventana de consola).
+
+Como ponerla a funcionar
 1. Instalar Python 3.10 o superior (https://www.python.org, marcar "Add python to PATH").
 2. En esta carpeta abrir una consola y correr una sola vez:   pip install -r requirements_app.txt
-3. Doble clic en INICIAR_APP.bat (o en consola: python -m streamlit run app_ebsa.py).
-   Se abre en el navegador en http://localhost:8501
-4. Usuarios y claves: estan en .streamlit\secrets.toml (comercial / soporte / admin). Se pueden cambiar ahi.
+3. Crear el archivo de usuarios (una sola vez):
+       mkdir .streamlit                                   (si la carpeta no existe)
+       copy secrets.toml.ejemplo .streamlit\secrets.toml
+   y abrir .streamlit\secrets.toml con el Bloc de notas para cambiar cada clave "CAMBIAR" por una propia.
+   Mientras una clave diga CAMBIAR, ese usuario no puede entrar. Si el paquete ya trae .streamlit\secrets.toml,
+   este paso no hace falta: quien lo envio dira las claves por otro medio.
+4. Doble clic en INICIAR_APP.bat o en INICIAR_APP_V2.bat.
 
+Usuarios: comercial (vista Comercial), soporte (Comercial y Soporte), admin (las tres vistas).
+
+Si algo falla
+- "Falta el archivo de usuarios": falta el paso 3.
+- "Usuario o clave incorrectos": la clave sigue en CAMBIAR o no coincide con la del archivo.
+- La interfaz nueva se ve sin estilos o sin mapa: falta la carpeta recursos_v2 o el archivo componentes_v2.py.
+- "No module named streamlit": falta el paso 2.
+- El puerto esta ocupado: cerrar la otra ventana de consola o abrir con otro puerto:
+       python -m streamlit run app_ebsa_v2.py --server.port 8503
+
+Datos y confidencialidad
 La carpeta datos\ es una copia de las salidas del pipeline a la fecha indicada abajo. No se actualiza sola:
 cuando haya un mes nuevo, pedir la carpeta otra vez. Los archivos de la empresa (TC1, TC2) y los modelos
-entrenados NO vienen en esta copia; la pagina no los necesita.
+entrenados NO vienen en esta copia; las paginas no los necesitan.
+La carpeta datos\ contiene informacion de clientes de la empresa (NIU, direccion, consumo): es para uso interno
+del equipo. No publicarla ni subirla a internet. La interfaz nueva tiene la opcion "Ocultar NIU y direcciones"
+(en Datos y sesion) para presentar en pantalla sin mostrar identificadores.
 
 Corte de los datos: 2026-04
