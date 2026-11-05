@@ -1,9 +1,11 @@
 # Proyecto EBSA — Consumo de energía por cliente
 
+> Para entender el flujo completo, la función de cada notebook, los cortes por zona, el backtest, el seguimiento en vivo y la simulación, consultar **`GUIA_TECNICA.md`**. Los comandos operativos están en **`COMANDOS.md`**.
+
 Análisis, agrupamiento, detección de caída y pronóstico del consumo eléctrico de los clientes de la Empresa de Energía de Boyacá (EBSA).
 
 - **Clientes:** ~592.000 NIU.
-- **Historia:** enero 2022 → enero 2026 (49 meses) en la extracción actual; crece un mes con cada archivo nuevo de la empresa.
+- **Historia:** enero 2022 → abril 2026 (52 meses) en la extracción actual; crece un mes con cada archivo nuevo de la empresa.
 - **Fuente:** los archivos mensuales XLSX/CSV que entrega la empresa (formato TC2), en `Datos_Ebsa\00_formato_TC2\`, y el archivo de usuarios atendidos por otros comercializadores, en `Datos_Ebsa\00_otros_comercializadores\`. **Nunca se modifican**: el pipeline los lee tal cual llegan.
 - **Glosario:** los códigos del TC2 (ciclo, clase de servicio, tipo de medidor, tipo de lectura, tipo de factura) se traducen a texto con `utilidades/utilidades_glosario.py` (tomado de `GLOSARIO_EBSA.xlsx`), y los perfiles técnicos P0–P4 se muestran como **grupos de consumo**: Intermitente, Pequeño (< 500 kWh/mes), Mediano (500–5.000), Grande (≥ 5.000) y Sin historia suficiente.
 
@@ -18,6 +20,7 @@ El proyecto termina en **tres productos independientes**. Cada uno tiene su prop
 | **B. Pronóstico de consumo a 6 meses** | ¿Cuánto va a consumir cada cliente en cada uno de los próximos 6 meses? | 1 → 8 (el modelo se entrena en el 8) | `04_pronostico\modelo_final\predicciones_segmentadas_optimizadas_6_meses.parquet` |
 | **C. Riesgo de fuga a otro comercializador** | ¿Qué clientes tienen más probabilidad de irse a otro comercializador en los próximos 6 meses, cuánto facturan hoy y quiénes ya se fueron? Aprende de los usuarios que la empresa reporta atendidos por otros comercializadores. | 14 | `10_riesgo_fuga\riesgo_fuga_clientes.csv` y `lista_riesgo_fuga_gerencial.csv` |
 
+Los tres productos se entregan también por **grupo de consumo**, con nombres de negocio y columnas del glosario, en `11_exportes_negocio\` (paso 15), que es lo que descarga la página.
 
 El producto A **usa** una columna del producto B (`pred_1m_kwh`, el pronóstico del mes siguiente) para la trayectoria, por eso el notebook 8 se corre antes que el 11.
 
@@ -58,7 +61,10 @@ Pipeline_Ebsa\\
 │   ├── 08_seguimiento\\              ← notebooks 12 y 13
 │   └── 09_exportes\\                 ← notebook 15
 │
-├── scripts\\                          ← automatización y diagnósticos
+├── scripts\\                          ← automatización, diagnósticos y procesos auxiliares
+│   ├── cruzar_ubicacion_tc1.py\\       ← cruce independiente de ubicación TC1
+│   ├── proyeccion_anual_consumo.py\\   ← proyección anual por zona
+│   └── demás scripts de soporte
 ├── utilidades\\                       ← módulos Python compartidos
 ├── web\\                              ← aplicación Streamlit (borrador inicial)
 └── plantillas\\                       ← formatos de entrada manual
@@ -115,7 +121,7 @@ La aplicación web se inicia con alguno de los siguientes comandos:
 
 ```bash
 streamlit run web\\app_ebsa.py
-python -m streamlit run app_ebsa.py
+python -m streamlit run web\\app_ebsa.py
 ```
 
 Estructura completa de la carpeta de datos:
@@ -130,6 +136,9 @@ Datos_Ebsa/
 ├── 00_otros_comercializadores/
 │   └── Archivo XLSX con los usuarios atendidos por otros comercializadores.
 │       Entrada del paso 14. No modificar.
+
+├── 00_formato_TC1/
+│   └── TC1_MMAAAA.csv y Código DANE.xls. Entrada independiente para ubicación.
 │
 ├── 01_historico_procesado/
 │   ├── historico_2022.parquet
@@ -139,7 +148,7 @@ Datos_Ebsa/
 │   ├── historico_2026.parquet
 │   └── detalle_mensual/
 │       └── Detalle factura a factura por archivo,
-│           utilite para auditoría.
+│           útil para auditoría.
 │
 ├── 02_serie_reconstruida/
 │   ├── copia_historicos/
@@ -198,21 +207,24 @@ Datos_Ebsa/
 │       └── Copia de la lista de riesgo correspondiente
 │           a cada fecha de corte.
 │
-└── 11_exportes_negocio/
+├── 11_exportes_negocio/
     ├── pronostico_6_meses/
     ├── lista_caida/
     └── riesgo_fuga/
         Archivos finales organizados por grupo de consumo
         para ser descargados y utilizados por el negocio.
+
+├── 13_ubicacion_clientes/              ← salida de cruzar_ubicacion_tc1.py
+└── 14_proyeccion_anual/                ← salida de proyeccion_anual_consumo.py
         
 C:\Users\Home\Documents\GitHub\ProyectoEBSA\
 └── Pipeline_Ebsa\                 ← EL CÓDIGO: 15 notebooks del pipeline + EDA_historico_EBSA.ipynb independiente, utilidades_*.py, pipeline_mensual.py, app_ebsa.py
 
 ```
 
-`python prscripts\\eparar_carpeta_datos.py` (desde Pipeline_Ebsa) crea las carpetas vacías de Datos_Ebsa` y dice qué copiar del proyecto anterior.
+`python scripts\\preparar_carpeta_datos.py` (desde Pipeline_Ebsa) crea las carpetas vacías de Datos_Ebsa y dice qué copiar del proyecto anterior.
 
---# 2.2 Variables de entorno y rutas del código
+## 2.2 Variables de entorno y rutas del código
 
 `pipeline_mensual.py` calcula su propia ubicación con `Path(__file__).resolve().parent`, por lo que puede ejecutarse desde cualquier carpeta. Define estas rutas internas:
 
@@ -240,6 +252,8 @@ Carpeta: `Datos_Ebsa\07_gestion_caida\`
 | `resumen_gestion_por_corte.csv` | Los mismos totales por `estrato`, `clase_servicio`, `tramo_consumo` y `zona`. |
 | `diagnostico_sesgo_pronostico.csv` | Explica si la trayectoria se calculó también para rurales (brecha de sesgo rural vs urbano). |
 | `auditoria_tarifa.csv` | Cuántos clientes tienen tarifa real y cuántos no. |
+| `clientes_cero_sostenido.csv` | Los clientes en cero o casi cero sostenido que se retiraron de la lista (regla de §3.2b-bis): `consumo_reciente_kwh`, `consumo_max_mes_ventana_kwh` (el mes más alto de su ventana), `umbral_casi_cero_kwh`, `consumo_referencia_kwh` y `valor_facturaba_antes_mes` (lo que consumían y facturaban antes), `ultimo_mes_con_consumo`, `meses_en_cero` y `motivo` (cero exacto o casi cero). Alimenta la sección *Clientes sin consumo* de la página. |
+| `clientes_excluidos_de_gestion.csv` | Los clientes de clases sin gestión (AC, AU, RI, PR) retirados de la lista. |
 | `resumen_entradas_salidas_lista.csv` | Una fila por corte: cuántos clientes permanecen, salieron y entraron frente al corte anterior. |
 | `historial\gestion_caida_operativa_corte_AAAA-MM.csv` | La lista operativa de cada corte, tal como se entregó. No se sobreescribe. |
 | `retroalimentacion\resultado_gestion_plantilla.csv` | Plantilla para que la empresa registre las visitas (§9). |
@@ -252,22 +266,22 @@ Columnas de las listas operativa y gerencial (las que la página debe interpreta
 | `ciclo_etiqueta`, `orden_en_ciclo` | Ciclo de lectura (00–99, `SIN_CICLO` si no se conoce) y posición del cliente dentro de su ciclo. |
 | `NIU` | Identificador del cliente. |
 | `zona`, `clase_servicio`, `estrato`, `tramo_consumo` | Urbano/Rural, tipo de servicio, estrato, tamaño (`BAJO` <30 kWh, `MEDIO` 30–99, `ALTO` 100–299, `GRANDE` ≥300). |
-| `cluster_id` | Segmento de negocio al que pertenece. |
+| `cluster_id` | Segmento de negocio al que pertenece (ver §5.6). |
 | `veredicto` | `CAIDA_CONFIRMADA` (cae vs. periodo anterior **y** vs. año pasado) o `CAIDA_SOSTENIDA` (venía cayendo y sigue). Solo estos dos entran a gestión. |
 | `severidad` | `CRITICA` / `FUERTE` / `MODERADA`, relativa a lo normal de su segmento. |
 | `consumo_anterior_kwh`, `consumo_reciente_kwh`, `perdida_kwh_mes` | Consumo medio mensual antes, ahora, y la diferencia. |
 | `tarifa_kwh`, `tiene_tarifa` | **Tarifa real** ($/kWh) aplicada a ese cliente en su última factura. Nunca se estima: si no hay, `tiene_tarifa = False`. |
-| `valor_riesgo_mes` | `perdida_kwh_mes × tarifa_kwh`, en pesos/mes. **Vacío** si no hay tarifa (no se inventa). |
+| `valor_riesgo_mes` | `perdida_kwh_mes × tarifa_kwh`, en pesos/mes. **Vacío** si no hay tarifa (no se inventa). Desde el 2026-10-08 `perdida_kwh_mes` es coherente con el veredicto: contra el año pasado en `CAIDA_SOSTENIDA`, y la **menor** de las dos referencias en `CAIDA_CONFIRMADA` (antes era siempre la mayor de las dos, lo que inflaba el valor con acumulados o refacturaciones de hace un año). El estudio de caída conserva la mayor en `perdida_maxima_kwh_mes` y marca `referencia_anio_muy_superior` cuando el año pasado triplica al periodo anterior. |
 | `valor_orden` | Solo para ordenar (los sin tarifa no se hunden al fondo). No mostrarlo como valor. |
 | `variacion_vs_anterior_pct`, `variacion_vs_anio_pct` | Variación % del consumo reciente contra el periodo anterior y contra el mismo periodo del año pasado. |
 | `meses_ventana` | 3 (lectura mensual) o 6 (lectura trimestral/rural). |
-| `trayectoria` | Qué prevé el modelo para el **mes siguiente**: `CAIDA_ACELERANDO` (seguirá bajando más allá del error del modelo), `SIN_RECUPERACION_PREVISTA` (se queda donde está), `RECUPERACION_PREVISTA` (sube), `NO_EVALUABLE_RURAL` (rural excluido por sesgo), `SIN_PRONOSTICO` (el cliente no tiene predicción). |
+| `trayectoria` | Qué prevé el modelo para el **mes siguiente**: `CAIDA_ACELERANDO` (seguirá bajando más allá del error del modelo), `SIN_RECUPERACION_PREVISTA` (se queda donde está), `RECUPERACION_PREVISTA` (sube más que el error del modelo **y** el pronóstico lo devuelve al menos a la mitad de lo que consumía antes de caer, con un mínimo de 10 kWh; una subida que no llega a ese nivel queda `SIN_RECUPERACION_PREVISTA`), `NO_EVALUABLE_RURAL` (rural excluido por sesgo), `SIN_PRONOSTICO` (el cliente no tiene predicción). |
 | `pred_1m_kwh`, `variacion_proyectada_pct`, `wape_aplicable_pct` | Pronóstico del próximo mes, su variación contra el consumo reciente, y el error del modelo (WAPE h=1 de su perfil) usado como umbral. |
-| `estado_en_lista` | `NUEVO` (primera vez en la lista), `PERSISTENTE` (también estaba el mes pasado), `REINCIDENTE` (estuvo en algún corte de los últimos 12 meses, pero no el pasado). Sale de cruzar con `historial\`. |
+| `estado_en_lista` | `NUEVO` (primera vez en la lista), `PERSISTENTE` (también estaba en el corte anterior), `REINCIDENTE` (estuvo en algún corte de los últimos 12 meses, pero no en el anterior). Sale de cruzar con `historial\`; la racha se cuenta sobre los cortes que existen (en operación mensual, el mes anterior). |
 | `meses_consecutivos_en_lista`, `veces_en_lista_12m` | Cuántos meses seguidos lleva en la lista (1 = solo este) y cuántas veces apareció en los últimos 12 cortes. |
 | `fecha_corte` | Mes de corte de la lista (fin de la ventana del estudio de caída). Es la clave para el historial y para la retroalimentación. |
 
-### 3.2 Producto B — Pronóstico a 6 meses 
+### 3.2 Producto B — Pronóstico a 6 meses (lo que se muestra)
 
 Carpeta: `Datos_Ebsa\04_pronostico\modelo_final\`
 
@@ -285,23 +299,43 @@ Carpeta `10_riesgo_fuga\` (notebook 14). Todo con corte en el último mes consol
 
 | Archivo | Qué es |
 |---|---|
-| `riesgo_fuga_clientes.csv` | Todos los clientes puntuados: `prob_fuga_6m` (probabilidad de salir en los próximos 6 meses, en escala real), `nivel_riesgo` (ALTO / MEDIO / BAJO), `valor_en_riesgo_mes` (consumo promedio 6 meses × tarifa **real**; sin tarifa queda vacío), `valor_esperado_perdida_mes` (probabilidad × valor; es el orden del `ranking`), `senales` (en texto: caída reciente, meses en cero, zona con más salidas, tamaño), zona y clase en texto, grupo de consumo, tipo de medidor y de lectura, promedio semestral, recurrencia frente a cortes anteriores (`estado_en_lista`). |
+| `riesgo_fuga_clientes.csv` | Todos los clientes puntuados: `prob_fuga_6m` (probabilidad de fuga en los próximos 6 meses, calibrada con lo observado en validación y con tope en el máximo comprobado), `puntaje_modelo` (el puntaje que ordena y define los niveles; desempata a los clientes que comparten el tope de probabilidad), `nivel_riesgo` (ALTO / MEDIO / BAJO), `valor_en_riesgo_mes` (consumo promedio 6 meses × tarifa **real**; sin tarifa queda vacío), `valor_esperado_perdida_mes` (probabilidad × valor; es el orden del `ranking`), `senales` (en texto: caída reciente, meses en cero, zona con más salidas, tamaño), zona y clase en texto, grupo de consumo, tipo de medidor y de lectura, promedio semestral, recurrencia frente a cortes anteriores (`estado_en_lista`). |
 | `lista_riesgo_fuga_gerencial.csv` | Solo ALTO y MEDIO, ordenados por pérdida esperada. `lista_riesgo_fuga_por_zona.csv`: los mismos, por zona y probabilidad. |
 | `clientes_con_otro_comercializador.csv` | Los NIU del archivo de la empresa, con su estado (`CON OTRO COMERCIALIZADOR`, `REGRESÓ A EBSA`, `SIN HISTORIA EN TC2`), comercializador, municipio, mes de salida y de dónde se dedujo, y lo que facturaban antes de irse. |
-| `vigilancia_mercado_no_regulado.csv` | Ciclo 33 (USUARIOS NO REGULADOS), clase IR o consumo ≥ 55.000 kWh/mes: por tamaño pueden negociar con cualquier comercializador. |
+| `vigilancia_mercado_no_regulado.csv` | Ciclo 33 (USUARIOS NO REGULADOS), clase IR o consumo ≥ 55.000 kWh/mes: por tamaño pueden negociar con cualquier comercializador. **Se puntúan aparte y no entran al ranking ni a las listas** (decisión 2026-10-02): traen `motivo`, `estado` (PUNTUADO fuera del ranking / YA CON OTRO COMERCIALIZADOR / SIN PUNTUAR), `nivel_riesgo` (solo por probabilidad) y `prob_fuga_6m`. |
 | `perfil_clientes_que_se_fueron.csv` | Cómo son los que se fueron: por clase, zona, tamaño, comercializador y municipio. |
 | `resumen_riesgo_fuga_por_zona.csv`, `resumen_riesgo_fuga_por_grupo.csv` | Cuántos ALTO/MEDIO y cuánta pérdida esperada por zona y por grupo de consumo. |
-| `metricas_modelo_fuga.csv`, `importancia_variables_fuga.csv`, `hiperparametros_fuga.json`, `optuna_ensayos_fuga.csv` | Calidad del modelo evaluada por cortes en el tiempo (AUC, precisión y *lift* en el top 50/100/200/500), con la fila de los parámetros base y la de los elegidos; qué variables pesan; los hiperparámetros elegidos y los 30 ensayos de Optuna (semilla fija; el primer ensayo es siempre la configuración base). |
+| `metricas_modelo_fuga.csv`, `importancia_variables_fuga.csv`, `hiperparametros_fuga.json`, `optuna_ensayos_fuga.csv` | Calidad del modelo evaluada por cortes en el tiempo (AUC, precisión y *lift* en el top 50/100/200/500), con las filas del modelo (parámetros fijos conservadores), de la referencia "ordenar por consumo de 12 meses" y por cliente distinto; qué variables pesan; los parámetros usados; y los 30 ensayos de Optuna, que desde el 2026-10-08 son solo un análisis de sensibilidad y no eligen el modelo. |
 | `seguimiento_riesgo_fuga.csv` | Para cada corte anterior: de los señalados ALTO/MEDIO, qué % efectivamente se fue en sus 6 meses, frente a la tasa base. |
 | `historial\riesgo_fuga_corte_AAAA-MM.csv` | Copia de cada corte (no se sobreescribe). |
 
-**Población.** Se puntúan las clases de servicio que aparecen entre los que ya se fueron (hoy comercial, industrial, oficial, acueductos y no regulados), sin alumbrado público, provisionales, ciclos internos (15, 90, 91, 94, 96, 98, 99) ni autogeneradores (ciclo 50). Si el archivo trae algún día un residencial, la población se amplía sola. Los que ya están con otro comercializador o en cero sostenido no se puntúan: van en `clientes_con_otro_comercializador.csv`.
+**Población.** Se puntúan las clases de servicio que aparecen entre los que ya se fueron (hoy comercial, industrial, oficial, acueductos y no regulados), sin alumbrado público, provisionales, ciclos internos (15, 90, 91, 94, 96, 98, 99) ni autogeneradores (ciclo 50 **actual**). Si el archivo trae algún día un residencial, la población se amplía sola. Los que ya están con otro comercializador o en cero sostenido no se puntúan: van en `clientes_con_otro_comercializador.csv`. El mercado no regulado (ciclo 33, clase IR o ≥ 55.000 kWh/mes) se puntúa con el mismo modelo pero queda **fuera de `riesgo_fuga_clientes.csv`, del ranking, de las listas, de los resúmenes y de los exportes**: solo aparece en `vigilancia_mercado_no_regulado.csv`, porque su seguimiento es comercial y no de cuadrilla.
 
 **Cómo se ve una salida en TC2.** En los datos reales, el cliente que se cambia **no desaparece**: sigue apareciendo con 0 kWh y solo meses después deja de estar en el archivo. Por eso el mes de salida es el más temprano entre su primer mes en el archivo de otros comercializadores, su primer mes de consumo cero sostenido (≥ 3 meses) y el mes siguiente a su última fila; y si algún día el TC2 trae el ciclo 97 (OTROS COMERCIALIZADORES), cuenta automáticamente.
 
-**Niveles.** ALTO: probabilidad ≥ 5 veces la tasa base o dentro del 1 % más alto; MEDIO: ≥ 2 veces la tasa base o dentro del 5 % más alto. Así siempre hay una lista corta para trabajar aunque el riesgo general sea bajo.
+**Cambios del 2026-10-09 (segunda ronda de revisión).** (1) *Redacción*: la página habla de **probabilidad de fuga**, nunca de clientes que "se van a ir"; la sección de Comercial se llama *Clientes con probabilidad de fuga* y la columna de señales, *Señales observadas*. (2) *Recurrencia en fuga*: PERSISTENTE se cuenta sobre los cortes guardados que existen (misma regla que la lista de caída); antes salía siempre 0. (3) `riesgo_fuga_clientes.csv` guarda `puntaje_modelo`. (4) *Paso 13*: una visita de un cliente rural (cuyo `fecha_corte` es el de su zona, no el de la corrida) ya no detiene el pipeline. (5) *Proyección anual*: la etiqueta CONFIABLE / ORIENTATIVO de cada escenario usa el error de su propio modelo (la página además la recalcula, así que vale aunque el archivo sea anterior). (6) *Página, memoria*: las tablas se guardan una sola vez en caché y cada pantalla recibe una vista liviana; en la prueba con un usuario, la memoria del servidor pasó de superar 6 GB tras unas 15 secciones (y caerse) a mantenerse entre 0,7 y 1,5 GB en las 24 secciones. La sección *Descargas* lee solo el archivo que se elige. (7) *Página, textos*: cabecera de Panorama con el total y lo que hay para gestionar ahora; mensaje claro cuando el NIU no existe o un filtro deja la lista vacía; se acepta un NIU pegado desde Excel con ".0"; un cliente estacional muestra "Estacional" en vez de gravedad; la clave de ejemplo "CAMBIAR" no abre sesión; tabla del modelo frente a pronósticos simples en *Pronóstico 6 meses*.
 
-### 3.2c Exportes por grupo de consumo 
+**Correcciones del 2026-10-08 (revisión independiente).** (1) *Parámetros fijos y conservadores* (`PARAMS_CONSERVADORES`: 200 árboles, 7 hojas, hojas de al menos 100 clientes): con ~80 clientes que se fueron, elegir hiperparámetros con Optuna sobre la misma validación que se reporta daba una cifra optimista (el "mejor de 30 ensayos" movía la precisión del top 100 entre 0 % y 12 % según la corrida). Optuna se conserva solo como análisis de sensibilidad (`optuna_ensayos_fuga.csv`). (2) *Cada cliente que se fue pesa lo mismo* (`pesar_positivos_por_niu`): antes cada uno aparecía en 4–5 filas casi idénticas y el modelo los memorizaba. (3) *Probabilidad calibrada*: el puntaje del modelo ordena, pero no es una probabilidad; un calibrador ajustado con predicciones fuera de muestra lo lleva a la fracción que realmente se fue en validación (queda guardado en el `.joblib`). Es una curva logística continua: la primera versión era isotónica y, con tan pocos casos, daba tres o cuatro escalones (todos los clientes de un tramo mostraban la misma cifra). Tiene un tope: un puntaje mayor que el máximo visto en validación recibe la probabilidad de ese máximo, porque más allá no hay casos observados. (4) *Niveles por cupo*: ALTO = el 1 % con mayor puntaje, MEDIO = hasta el 5 %, siempre con probabilidad ≥ tasa base. (5) *Líneas base en `metricas_modelo_fuga.csv`*: "ordenar por consumo de 12 meses" (por fila, por cliente distinto y solo entre clientes ≥ 500 kWh/mes) y métricas por cliente distinto. **Lectura honesta:** el modelo **no ordena mejor** que listar a los clientes por tamaño (AUC 0,961 del modelo contra 0,979 de ordenar por consumo de 12 meses; por cliente distinto, precisión promedio 0,038 contra 0,040); sirve como lista de clientes grandes con señales para priorizar contactos, no para predecir quién se va. Por eso la página habla de *probabilidad de fuga* y nunca de clientes que "se van a ir", y la pérdida esperada se presenta como orden de magnitud. (6) *Clientes con sus tres últimos meses en cero* ya no se puntúan (`es_activo`). (7) *Seguimiento*: cuando la lista es posterior al último mes del archivo de otros comercializadores, `seguimiento_riesgo_fuga.csv` dice `observable = NO` y deja vacías las salidas, en vez de escribir 0 %.
+
+**Validación (2026-10-06).** El modelo se evalúa por cortes en el tiempo; desde esta fecha los cortes de validación entran **sin submuestreo de negativos** (antes iban al ~17 %, lo que inflaba la precisión y el *lift* del top 100), y la variable `tasa_salida_zona` se calcula **en cada corte** solo con las salidas conocidas hasta ese mes (antes era una sola tasa con todo el archivo, igual en todos los cortes).
+
+**Niveles (por cupo, desde el 2026-10-08).** ALTO: el 1 % con mayor puntaje del modelo; MEDIO: hasta el 5 %; en ambos casos solo clientes con probabilidad al menos igual a la tasa base. Así siempre hay una lista corta y de tamaño estable para trabajar. En la vigilancia de no regulados (fuera del ranking) el nivel se asigna solo por probabilidad.
+
+### 3.2b-bis Reglas de negocio de las listas (experto de negocio, 2026-10-02; ajuste del equipo, 2026-10-07)
+
+- **Clases sin gestión**: área común (AC), autoconsumos EBSA (AU), distritos de riego (RI) y provisionales (PR) no entran a la lista de caída ni al riesgo de fuga (`CLASES_SIN_GESTION` en `utilidades_glosario.py`). Siguen en la serie y en el pronóstico. El notebook 11 deja los retirados en `07_gestion_caida\clientes_excluidos_de_gestion.csv`.
+- **Cero sostenido (cero o casi cero)**: un cliente cuyo consumo no pasa, en **ningún mes** de su ventana reciente (3 meses los de lectura mensual, 6 los rurales de lectura trimestral), del mayor entre **10 kWh** y el **5 % de lo que consumía** (la mayor referencia entre el periodo anterior y el mismo periodo del año pasado) ya no consume (retiro, suspensión, predio desocupado) y no es una caída para revisar; el notebook 11 lo saca de la lista y lo deja en `07_gestion_caida\clientes_cero_sostenido.csv` con lo que facturaba antes (referencia conservadora, ver más abajo), y la página lo muestra en *Clientes sin consumo*. La condición es mes a mes, no sobre el promedio de la ventana: un cliente con dos meses en 0 y uno en 25 kWh sigue en la lista. La ventana termina en el corte de la zona de cada cliente, así que el mes provisional de los rurales no cuenta. El umbral es el mismo de la regla de cero sostenido del pronóstico (§3.2d). Hasta el 2026-10-06 la regla exigía consumo exactamente 0, y un industrial que pasó de 7.000 a 2–3 kWh seguía en la lista como caída con "recuperación prevista"; el ajuste del 2026-10-07 lo corrige. En el corte 2026-04 son 8.390 clientes (2.758 en cero exacto y 5.632 en casi cero) que facturaban $602,5 M/mes con la referencia actual (antes del cambio de referencia del 2026-10-08 esa cifra era $1.249 M/mes) y que inflaban la "facturación en riesgo"; la lista queda en 29.057 clientes. **El modelo de riesgo de fuga no cambia**: su etiqueta de salida sigue usando el cero exacto sostenido (≥ 3 meses), porque ahí se busca el momento en que el cliente dejó de ser facturado, no una caída sin gestión.
+- **Estacionales**: un cliente que en los últimos 24 meses, **antes de la ventana de su caída actual**, ya estuvo en cero (≤ 10 % de su mediana) y volvió a consumir, es estacional si además se cumple una de tres cosas: el pronóstico prevé recuperación al mes siguiente, el pronóstico prevé el repunte en alguno de los 6 meses siguientes (al menos la mitad del nivel previo y 10 kWh), o los mismos meses del año pasado también fueron bajos (al menos 2 de cada 3 casi en cero). Su "caída" es temporada baja; el motivo queda en la columna `motivo_estacional` (desde el 2026-10-07 la caída actual no puede ser su propia prueba de estacionalidad; la segunda y la tercera condición se añadieron el 2026-10-08 porque exigir la recuperación al mes siguiente dejaba como urgentes a clientes de temporada). Sigue en la lista con `prioridad_gestion = VIGILAR: estacional` (y `VIGILAR: se espera recuperación` para los no estacionales con recuperación prevista), al final de su ciclo y del ranking; la página los muestra con esa prioridad y las visitas por ciclo los ocultan por defecto. Columnas `estacional`, `prioridad_gestion` (`GESTIONAR`, `SEGUIMIENTO: caída antigua`, `VIGILAR: se espera recuperación`, `VIGILAR: estacional`).
+- **Caídas antiguas en seguimiento** (2026-10-07): un cliente con veredicto `CAIDA_SOSTENIDA` no cae frente a su periodo anterior; cayó hace meses frente al año pasado y se quedó en ese nivel (por ejemplo, de 8.500 a 1.800 kWh hace medio año). La pérdida es real y se sigue contando en la facturación que se está perdiendo, pero no es urgente: queda con `prioridad_gestion = SEGUIMIENTO: caída antigua`, detrás de `GESTIONAR` y antes de los `VIGILAR` en el orden de cada ciclo y en el ranking. Desde el 2026-10-08 esto vale para todas las caídas antiguas, también las que el pronóstico ve seguir bajando (columna `caida_antigua_sigue_bajando`): `GESTIONAR` queda solo para caídas recientes. En la página, una caída antigua tampoco se muestra como "Grave": su gravedad aparece como "Antigua (lleva meses así)" y "Grave" queda para caídas recientes (la severidad original sigue en el archivo y en la vista técnica). Las cifras por prioridad de cada corte están en `resumen_gestion_por_corte.csv` y en la salida del paso 11. En la página, *Consumía* y *Caída* se muestran frente a la referencia con la que se midió la pérdida (la mayor entre el periodo anterior y el mismo periodo del año pasado), hay columna y filtro *Tipo de caída* (Reciente / Lleva meses así) y las listas muestran por defecto solo `GESTIONAR`.
+- **"Se prevé que baje más" (`CAIDA_ACELERANDO`), corregido el 2026-10-09 (revisión, ronda 2).** Antes se marcaba cuando el pronóstico del mes siguiente quedaba por debajo del **promedio de la ventana reciente** en más que el error del modelo; en un cliente que ya venía bajando dentro de la ventana, su último mes está por debajo de ese promedio, así que un pronóstico igual o mayor que su último mes salía como "sigue bajando". Ahora exige que el pronóstico quede por debajo del **último mes consolidado** (columna nueva `consumo_ultimo_mes_kwh`; la variación queda en `variacion_vs_ultimo_mes_pct`) en más que el error del modelo. La recuperación prevista se evalúa primero y no cambia, así que **no cambian ni el tamaño de la lista ni las prioridades**; solo baja el número de clientes con esa tendencia (el paso 11 imprime cuántos eran con la regla anterior y cuántos con la actual). El seguimiento (paso 12) usa la misma base para `SIGUE_CAYENDO` en las listas generadas desde esa fecha; las listas guardadas anteriores no traen el último mes y se siguen midiendo contra el promedio de su ventana.
+- **"Facturaba antes" de los clientes sin consumo.** Es la referencia con la que se midió la caída según el veredicto (en una caída confirmada, la menor entre el periodo anterior y el año pasado), no el máximo que el cliente llegó a facturar; el umbral de "casi cero" sí usa la mayor de las dos. Es una cifra conservadora.
+- **Niveles de fuga**: el "top 1 % / 5 %" solo aplica a clientes con probabilidad ≥ tasa base; nadie por debajo del riesgo promedio queda en ALTO o MEDIO (antes, con el ranking plano, un cliente con 0,004 % podía salir MEDIO). La página muestra la probabilidad con decimales útiles y llama "factura promedio 6 meses" a lo que antes decía "factura hoy".
+- **Autogeneradores** (ciclo 50 actual): fuera de todo el universo (sección 5.3).
+- **Zona regional**: columna `zona_regional` en todas las listas (`ZONA_REGIONAL_POR_CICLO`): CENTRO = ciclos 0, 9, 10, 19; TUNDAMA = 1, 11; SUGAMUXI = 2, 12; OCCIDENTE = 3, 22; ORIENTE = 4, 13; NORTE = 5, 21; RICAURTE = 6, 23; PUERTO BOYACÁ = 7, 38. Es la dirección regional que decide las acciones en terreno; el ciclo detallado se conserva para las cuadrillas. La página filtra y resume por zona regional.
+- `verificar_corrida.py` marca ERROR si alguna clase sin gestión o un autogenerador aparece en las listas, o un no regulado en el ranking de fuga.
+
+### 3.2c Exportes por grupo de consumo (lo que descarga la página)
+
 Carpeta `11_exportes_negocio\` (notebook 15): `pronostico_6_meses\pronostico_6_meses_<grupo>.csv`, `lista_caida\lista_caida_<grupo>.csv`, `riesgo_fuga\riesgo_fuga_alto_y_medio_<grupo>.csv` y `riesgo_fuga_todos_los_puntuados_<grupo>.csv`, más uno `_todos_los_grupos` por producto, e `indice_exportes.csv` con archivo, grupo, filas y corte. Los grupos son: Intermitente (mediana 12 meses ≤ 10 kWh o ≥ 50 % de meses en cero), Pequeño (10–500 kWh/mes), Mediano (500–5.000), Grande (≥ 5.000) y Sin historia suficiente (< 6 meses válidos). Todas las listas traen `zona_nombre`, `clase_servicio_nombre`, `grupo_consumo`, `tipo_medidor_nombre`, `tipo_lectura_nombre`, `consumo_promedio_semestral_kwh`, `valor_facturado_mes` y `valor_facturado_origen` (dato del TC2, columna Q, cuando el histórico lo trae; si no, consumo × tarifa real del cliente — nunca una tarifa imputada).
 
 ### 3.2d Regla de cero sostenido en el pronóstico
@@ -312,7 +346,8 @@ Un cliente no intermitente (mediana de 12 meses ≥ 100 kWh) con sus **dos últi
 
 Cada reentrenamiento guarda una copia del modelo con el corte en el nombre (`pronostico_corte_AAAA-MM.joblib`, `agrupamiento_...`, `criterios_caida_...`, `riesgo_fuga_...`) y una fila en `registro_versiones.csv`; cada corrida anota en `registro_uso.csv` qué versión usó para qué corte. `pipeline_mensual.py --modo aplicar --version-modelo AAAA-MM` corre con una versión concreta (para volver atrás o para comparar). El seguimiento (`08_seguimiento`) trae `fecha_corte_modelo` y `meses_desde_entrenamiento` en cada fila, que es lo que permite ver el deterioro por versión.
 
-### 3.3 Seguimiento — precisión en vivo
+### 3.3 Seguimiento — precisión en vivo (lo que se muestra)
+
 Carpeta: `Datos_Ebsa\08_seguimiento\` (notebook 12). Se llena mes a mes: solo puede evaluar meses que ya quedaron consolidados, así que en la primera corrida está vacío.
 
 | Archivo | Contenido |
@@ -320,9 +355,9 @@ Carpeta: `Datos_Ebsa\08_seguimiento\` (notebook 12). Se llena mes a mes: solo pu
 | `seguimiento_pronostico_global.csv` | Por fecha de corte y horizonte: `WAPE_pct` (error real del pronóstico contra lo que pasó), `sesgo_pct` (+ = pronosticó de más), `n`. **Es la precisión en vivo**, distinta del backtest. |
 | `seguimiento_pronostico_por_perfil.csv` | Lo mismo por perfil, con `WAPE_backtest_pct` y `dif_vs_backtest_pp` al lado: si esa diferencia es claramente positiva varios meses seguidos, toca reentrenar. |
 | `seguimiento_pronostico_por_zona.csv` | Lo mismo por rural / urbano. |
-| `seguimiento_lista_gestion.csv` | Qué pasó con los clientes de cada lista en los meses siguientes: `RECUPERADO` (volvió al 90 % de lo que consumía antes de caer), `ESTABLE_BAJO` (se quedó en el nivel caído), `SIGUE_CAYENDO` (bajó del 90 % de su consumo reciente). Por trayectoria, severidad y zona: es la prueba de que las etiquetas discriminan. |
+| `seguimiento_lista_gestion.csv` | Qué pasó con los clientes de cada lista en los meses siguientes: `RECUPERADO` (volvió al 90 % del nivel contra el que se midió su caída: periodo anterior o mismo periodo del año pasado, el que originó el veredicto), `ESTABLE_BAJO` (se quedó en el nivel caído), `SIGUE_CAYENDO` (bajó del 90 % del promedio de su ventana reciente). Por trayectoria, veredicto, severidad y zona. Desde el 2026-10-08 cada lista de zona y cada pronóstico se cuentan una sola vez (antes los rurales entraban dos veces cuando su corte no avanzaba) y la recuperación ya no se mide contra el periodo anterior, que en una caída sostenida es casi igual al reciente. No hay grupo de control: son porcentajes descriptivos; lo que sí muestran es que la trayectoria ordena bien (los `CAIDA_ACELERANDO` siguen cayendo mucho más que los demás). |
 
-### 3.4 Modelos entrenados 
+### 3.4 Modelos entrenados (lo que la página carga si necesita **volver a predecir**)
 
 Si la página solo muestra las salidas ya calculadas, no necesita cargar modelos. Los necesita si va a puntuar clientes nuevos o el mes nuevo sin correr los notebooks.
 
@@ -333,10 +368,10 @@ Si la página solo muestra las salidas ya calculadas, no necesita cargar modelos
 | Pronóstico — selección | `...\seleccion_modelo_por_perfil_horizonte_optimizada.csv` | Qué algoritmo ganó en cada perfil × horizonte y con qué `alpha_ml`. | Mostrar "qué modelo se usa para cada grupo". |
 | **Agrupamiento (final)** | `05_segmentos_clientes\modelo_agrupamiento.joblib` | Diccionario con, por zona (`URBANO`, `RURAL`): `modelo` (clustering), `scaler` (RobustScaler), `limites_winsor` (recorte p1–p99), `mapa_segmentos` (cluster → nombre de negocio). Además `columnas_clustering` (orden exacto), `catalogo_segmentos` (nombre → acción y prioridad), `tramos_consumo`, `umbrales_negocio`, `semilla`, `ventana`. | Para un cliente nuevo: construir las mismas features de 12 meses → winsorizar con `limites_winsor` → `scaler.transform` → `modelo.predict` → `mapa_segmentos` → nombre `ZONA_SEGMENTO_TRAMO`. |
 | **Criterios de caída (final)** | `06_estudio_caida\criterios_caida_por_segmento.joblib` (copia legible: `.csv`) | Umbrales de caída **por segmento** (`umbrales_vs_anterior`, `umbrales_vs_anio`), con el criterio usado (`PORCENTAJE` o `KWH`), y los parámetros (`K_DESVIACIONES`, banda [−60, −10] %, `UMBRAL_MINIMO_PERDIDA_KWH = 10`). | Reaplicar exactamente la misma regla en el mes siguiente sin recalcular umbrales, para que dos meses sean comparables. |
-| **Detector del borde provisional** | `Pipeline_Ebsa\utilidades\utilidades_borde.py` | Función `ultimo_periodo_consolidado(serie)` → último mes que se puede usar. | Lo llaman los notebooks 8, 9, 10 y 12 antes de entrenar, agrupar, evaluar o comparar . |
-| **Compuerta de calidad** | `Pipeline_Ebsa\utilidades\utilidades_calidad.py` | Función `validar_mes_entrante(historico)` → reporte por chequeo; lanza error si el archivo del mes llegó mal. | La llama el notebook 2 antes de reconstruir. |
+| **Detector del borde provisional** | `Pipeline_Ebsa\utilidades_borde.py` | Función `ultimo_periodo_consolidado(serie)` → último mes que se puede usar. | Lo llaman los notebooks 8, 9, 10 y 12 antes de entrenar, agrupar, evaluar o comparar (ver §6). |
+| **Compuerta de calidad** | `Pipeline_Ebsa\utilidades_calidad.py` | Función `validar_mes_entrante(historico)` → reporte por chequeo; lanza error si el archivo del mes llegó mal. | La llama el notebook 2 antes de reconstruir (§7). |
 
-> **En modo aplicar los tres modelos se cargan y se usan sin reentrenar.** Un mes normal no toca ningún `.joblib`; solo la corrida en modo reentrenar los sobreescribe.
+> **En modo aplicar (§8) los tres modelos se cargan y se usan sin reentrenar.** Un mes normal no toca ningún `.joblib`; solo la corrida en modo reentrenar los sobreescribe.
 
 > Los archivos `modelos_ganadores_segmentados.joblib` (notebook 6) y `modelos_ganadores_optimizados.joblib` (notebook 7) también existen en la misma carpeta, pero son **versiones anteriores**. El final es `modelos_ganadores_optimizados_final.joblib`.
 
@@ -538,6 +573,23 @@ python pipeline_mensual.py --modo reentrenar                # corrida de reentre
 python pipeline_mensual.py --modo aplicar --datos "D:\otra\Datos_Ebsa"   # solo si los datos no están en Documentos\Datos_Ebsa
 ```
 
+
+### Ubicación del TC1 en el flujo
+
+El TC1 se representa entre el notebook 13 y el notebook 14 como un proceso complementario:
+
+```text
+13. Evaluacion_retroalimentacion_gestion.ipynb
+        ↓
+cruzar_ubicacion_tc1.py
+        ↓
+13_ubicacion_clientes\
+        ↓
+14. Riesgo_fuga_comercializador.ipynb
+```
+
+El TC1 no entrena modelos ni reemplaza al TC2. Aporta municipio, dirección, coordenadas, circuito, transformador, zona y demás datos técnicos para enriquecer las fichas, mapas y visitas de campo. Aunque aparece entre 13 y 14 en el diagrama operativo, sigue siendo un proceso independiente que se repite cuando llega un TC1 nuevo.
+
 ## 8. Modo aplicar y modo reentrenar
 
 Los notebooks 8, 9, 10 y 14 leen la variable de entorno `EBSA_MODO` (la fija `pipeline_mensual.py`; si se abren a mano en Jupyter, vale el valor por defecto de la primera celda, `reentrenar`).
@@ -560,6 +612,39 @@ La lista dice *quién* parece estar dejando de consumir; solo la visita dice *po
 3. `hallazgo` toma un valor del catálogo, agrupado así: **con causa gestionable** (`MEDIDOR_DANADO`, `MEDIDOR_MANIPULADO_O_FRAUDE`, `ERROR_DE_LECTURA_O_FACTURACION`, `ACOMETIDA_O_RED_CON_FALLA`, `CONEXION_IRREGULAR`), **caída real sin gestión** (`PREDIO_DESOCUPADO`, `CAMBIO_DE_ACTIVIDAD_O_HABITO`, `AUTOGENERACION`, `CLIENTE_RETIRADO`), **sin novedad** (`SIN_NOVEDAD`: falso positivo) y **no verificado** (`NO_UBICADO`, `PENDIENTE`). El catálogo se puede ampliar en la primera celda del notebook 13.
 4. El notebook 13 (lo corre el pipeline) produce `evaluacion_retroalimentacion_resumen.csv`: cobertura de la lista, precisión gestionable y precisión de caída real por severidad, trayectoria, estado en lista, tramo, zona, segmento y ciclo. Si un cruce muestra precisión baja de forma sostenida, ese grupo debe bajar en el orden de la lista; ese ajuste se hace en el notebook 11.
 
+## 9b. Ubicación de los clientes y mapa (formato TC1) — paso aparte
+
+El TC1 de la empresa (`00_formato_TC1\TC1_MMAAAA.csv`, una fila por NIU, separado por `;`) trae el código DANE del municipio (columna N, 8 dígitos: 5 del municipio + 3 del centro poblado), la dirección, la ubicación SUI, el estrato/sector, el nivel de tensión, el circuito, el transformador y las **coordenadas** de cada cliente. Junto con `Código DANE.xls` (código → municipio, departamento y provincia) permite poner municipio a cualquier lista y dibujar el mapa.
+
+```
+python cruzar_ubicacion_tc1.py
+```
+
+Es un script independiente del pipeline mensual: no toca ningún notebook ni ninguna salida existente; se corre una vez y se repite solo cuando llegue un TC1 nuevo (toma el más reciente por el periodo del nombre). Deja la carpeta `13_ubicacion_clientes\`:
+
+| Archivo | Qué es |
+|---|---|
+| `ubicacion_clientes.parquet` | Una fila por NIU: `codigo_dane`, `codigo_municipio`, `municipio`, `provincia`, `departamento`, `zona_mapa` (una de las 8 zonas del mapa de la empresa, por el ciclo actual del cliente), `direccion`, `ubicacion_sui`, `estrato_sector`, `nivel_tension`, `circuito`, `transformador`, `latitud`, `longitud`, `altitud`, `coordenadas_validas` (dentro de la caja de Boyacá y vecinos), `autogenerador_tc1`, `periodo_tc1`. |
+| `municipios_zona.csv` | Una fila por municipio: `zona_ebsa` (la zona de los ciclos de sus clientes; en los datos de agosto 2026 cada municipio cae 100 % en una sola zona, así que la tabla municipio → zona sale de los datos, no del dibujo), `pct_zona`, `clientes_tc1`, `clientes_en_serie`, `coordenadas_validas`, `lat_centro` / `lon_centro` (mediana de las coordenadas de sus clientes, donde se dibuja el círculo). |
+| `auditoria_cruce_tc1.csv` | Cifras del cruce: filas, duplicados, códigos sin municipio, clientes fuera de Boyacá (municipios vecinos de Santander, Cundinamarca y Casanare), coordenadas sin dato o fuera de rango, autogeneradores según el TC1, clientes de la serie sin TC1. |
+
+Con eso la página muestra el municipio en Gestión por ciclo, Ranking gerencial, Riesgo de fuga (lista y vigilancia) y Buscar cliente (con un filtro por municipio en cada una), y la sección **Mapa** dibuja los municipios de Boyacá como círculos sobre el mapa (tamaño = cifra elegida: clientes, lista de caída, críticos, valor en riesgo, riesgo de fuga, pérdida esperada; color = zona EBSA con la paleta del mapa de la empresa), con tablas por zona y por municipio y la opción de ver los clientes de una lista como puntos. El mapa usa plotly (`pip install plotly`); sin plotly dibuja un mapa básico sin nombres al pasar el mouse. El contorno de las zonas no es un polígono oficial: es la agrupación de municipios por ciclo; si se quisiera un mapa coloreado por polígono habría que traer los límites municipales del DANE (Marco Geoestadístico Nacional) y disolverlos con `municipios_zona.csv`.
+
+Nota sobre `ubicacion_sui`: en los datos, el código 1 coincide casi exactamente con los ciclos rurales del glosario y el 2 con los urbanos; se guarda el código tal cual y la zona urbano/rural del proyecto sigue saliendo del ciclo, no de esta columna, hasta que la empresa confirme el significado.
+
+## 9c. Proyección de consumo por zona para la compra de energía — paso aparte
+
+```
+pip install statsmodels
+python proyeccion_anual_consumo.py            # 36 meses, umbral de confianza 5 %
+```
+
+Independiente del pipeline mensual. Toma la serie consolidada (`03_serie_modelado`, solo meses CONSOLIDADO, sin alumbrado ni ciclos internos), la agrega por **zona regional** y **TOTAL BOYACÁ** (GWh y clientes por mes), y **cada zona pasa por todos los candidatos**: la línea base estacional (mismo mes del año anterior, la referencia que hay que superar), seis variantes de Holt-Winters/ETS (tendencia aditiva, amortiguada o sin tendencia × estacionalidad aditiva o multiplicativa; sus parámetros de suavizado se estiman por máxima verosimilitud en cada ajuste) y SARIMA con **búsqueda de hiperparámetros**: 72 órdenes (p,d,q)(P,1,Q)₁₂ con p,q ∈ {0,1,2}, d ∈ {0,1}, P,Q ∈ {0,1}, de los que los 3 de menor AIC pasan al backtest. Gana el de menor WAPE a 1 año en un **backtest de orígenes móviles** (desde el mes 24 hasta el penúltimo, pronosticando hasta 24 meses adelante). **Verificación** de cada candidato: WAPE año 1 y año 2, sesgo (error medio con signo), cobertura real de la banda del 80 % (debe acercarse a 80 %) y, para el elegido, Ljung-Box sobre los residuos (p > 0,05 = sin estructura que el modelo haya dejado por fuera); se avisa si el ganador no supera la línea base. Todo queda en `comparacion_modelos_por_zona.csv` y en la página (expander "Ver todos los candidatos probados por zona"). `--rapido` usa uno de cada dos orígenes. Además del ganador (escenario **BASE**) se proyecta un escenario **ALTERNATIVO**: si el ganador no tiene tendencia, el mejor candidato con tendencia (qué pasa si el crecimiento de los primeros años continúa); si la tiene, el mejor sin tendencia (qué pasa si el consumo se estanca). Ambos salen con su error medido; para compra de energía lo usual es tomar el mayor como techo. En los datos reales de abril 2026 el total de Boyacá creció 3,5 % anual en 2022–2024 y quedó plano en 2024–2026, por lo que el backtest eligió un modelo sin tendencia y el escenario alternativo es el de crecimiento. Proyecta 36 meses con bandas del 80 % y 95 % (intervalos del modelo; en Holt-Winters por simulación) y suma por año calendario.
+
+Salidas en `14_proyeccion_anual\`: `serie_mensual_por_zona.csv`, `proyeccion_mensual_por_zona.csv` (real + proyección + bandas), `proyeccion_anual_por_zona.csv` (por año: meses reales/proyectados, total, bandas, **confiabilidad**, error del backtest, modelo), `error_backtest_por_zona.csv`, `comparacion_modelos_por_zona.csv` y, si existe el pronóstico a 6 meses, `comparacion_pronostico_individual.csv` (suma de los 580.000 pronósticos individuales vs. el modelo agregado del total, mes a mes).
+
+**Cuántos años mostrar.** Un año es `CONFIABLE` si el WAPE del backtest a ese horizonte es ≤ umbral (5 % por defecto, `--umbral`). Las bandas se **calibran** con el backtest: si la banda del 80 % cubrió menos del 80 % de los meses reales, se ensancha por el factor medido (`factor_calibracion_banda`), `ORIENTATIVO` si es mayor y `NO VERIFICABLE` si la historia no alcanza a probar ese horizonte (con 52 meses: el año 3). La sección *Proyección de consumo (compra de energía)* de la vista Comercial muestra el consumo mes a mes por zona, la proyección con bandas, la tabla por año con la confiabilidad y la frase "para esta zona se pueden usar los años …". La banda anual suma las mensuales (conservadora). Limitaciones declaradas: 52 meses = 4 ciclos anuales; no modela crecimiento de clientes ni tarifas ni clima; el año en curso mezcla real y proyección.
+
 ## 10. Página web
 
 `web/app_ebsa.py` es una aplicación Streamlit que **solo lee** las salidas del pipeline (no entrena ni recalcula nada). Para abrirla:
@@ -570,6 +655,42 @@ streamlit run web\app_ebsa.py    # se abre en http://localhost:8501
 ```
 
 Secciones: Resumen (cifras del corte, riesgo de fuga, trayectoria, estado en lista, valor por ciclo, severidad), Gestión por ciclo (lista operativa por ciclo con el nombre de la zona, filtrable por grupo de consumo y descargable), Ranking gerencial, **Riesgo de fuga** (lista filtrable por nivel, zona, grupo y clase; resumen por zona y grupo; los que ya están con otro comercializador y su perfil; vigilancia del mercado no regulado; calidad del modelo; seguimiento), Cortes (clase, estrato, zona, tramo), Buscar cliente (segmento, caída, posición en la lista, riesgo de fuga y pronóstico a 6 meses de un NIU; con buscador de ejemplos por grupo de consumo, segmento, trayectoria o ciclo), Pronóstico 6 meses (totales proyectados y precisión por grupo de consumo), **Descargas por grupo** (los archivos de `11_exportes_negocio\`), Seguimiento, Retroalimentación y Estado del pipeline. Todas las tablas muestran zona, clase de servicio, tipo de medidor y de lectura, promedio semestral y valor facturado con los nombres del glosario. La carpeta de datos se toma de `EBSA_DATOS` o se cambia en la barra lateral.
+
+### 10.1 Las dos versiones: en qué se diferencian y cómo conviven
+
+| | `app_ebsa.py` (original) | `app_ebsa_v2.py` (interfaz nueva) |
+|---|---|---|
+| Archivos que necesita | `app_ebsa.py`, `utilidades_glosario.py` | `app_ebsa_v2.py`, `componentes_v2.py`, la carpeta `recursos_v2\` y `utilidades_glosario.py` |
+| Cifras, reglas, permisos, descargas | Las de siempre | Las mismas: comparadas en 113 escenarios (indicadores y archivos de descarga idénticos) |
+| Navegación | Barra lateral con dos listas (vista y sección) | Pestañas de vista arriba, menú lateral agrupado y, en celular, menú inferior |
+| Tablas | Tabla completa con desplazamiento | Búsqueda, orden, páginas de 25 filas y columnas prioritarias; la descarga trae todas las filas |
+| Filtros | Sueltos sobre cada lista | Un bloque por lista con **Restablecer filtros**; el filtro de municipio solo ofrece los de la zona elegida |
+| Mapa | Círculos sobre un fondo que se descarga de internet | Límites de los 123 municipios (DANE), sin internet |
+| Buscar cliente (Administrador) | Arma siempre la tabla de ejemplos | La arma solo al pedirla (más rápida y con menos memoria) |
+| Extras | — | "Ocultar NIU y direcciones" para presentar; avisos de limitaciones destacados |
+| Streamlit | 1.35 o superior | 1.40 o superior (ver `GUIA_TECNICA.md` §3.9) |
+
+**Las dos a la vez.** Cada una en su consola y en un puerto distinto:
+
+```
+python -m streamlit run web\app_ebsa.py    --server.port 8501
+python -m streamlit run web\app_ebsa_v2.py --server.port 8502
+```
+
+**Regla para mantenerlas.** Ninguna reemplaza a la otra. Si se cambia un cálculo o una regla de negocio en una página, hay que hacer el mismo cambio en la otra; lo visual de la V2 vive en `componentes_v2.py`. Los datos se actualizan igual para las dos: se corre el pipeline por consola (sección 7) y las dos páginas leen los archivos nuevos solas, sin reiniciarlas.
+
+**Si la V2 no se ve bien.** Barra superior o menú sin estilos, o mapa de círculos en vez de municipios: falta `componentes_v2.py` o la carpeta `recursos_v2\` junto a `web\app_ebsa_v2.py`. Después de cambiar cualquier archivo de la V2 hay que detener la página (Ctrl+C) y volver a abrirla; recargar el navegador no basta. Más casos en `GUIA_TECNICA.md` §3.9.
+
+**Usuarios.** La página pide usuario y clave al abrir. Los usuarios están en `.streamlit\secrets.toml` (junto a `web\app_ebsa.py`; ese archivo está en `.gitignore`, así que se copia a mano a cada máquina a partir de `secrets.toml.ejemplo`): `comercial` abre solo la vista Comercial; `soporte` abre Soporte y Comercial; `admin` abre las tres y es el único que puede cambiar la carpeta de datos. Un mes nuevo no se incorpora desde la página: se corre el pipeline por consola (sección 7) y la página solo lee el resultado. Para cambiar una clave o agregar un usuario se edita ese archivo (cada usuario tiene `nombre`, `clave` y `vistas`) y se vuelve a abrir la página. *Cerrar sesión* está en la barra lateral.
+
+**Para compartir solo la página.** `python empaquetar_app.py` arma una carpeta autónoma con **las dos páginas** (`app_ebsa.py`, `app_ebsa_v2.py`, `componentes_v2.py`, `recursos_v2\`, `utilidades_glosario.py`), `INICIAR_APP.bat` (original, puerto 8501), `INICIAR_APP_V2.bat` (interfaz nueva, puerto 8502), `LEEME.txt`, `requirements_app.txt` y `datos\` con únicamente las salidas que las páginas leen (sin archivos de la empresa, sin modelos `.joblib` y sin notebooks). **El paquete no lleva claves**: incluye `secrets.toml.ejemplo` y quien lo recibe crea su `.streamlit\secrets.toml`; `--incluir-claves` copia el de esta máquina, como hacía antes. La carpeta `datos\` sí lleva información de clientes (NIU, dirección, consumo): es para el equipo, no para publicar. Cada página toma la carpeta `datos\` que esté junto a ella si existe, luego `EBSA_DATOS`, y si no la ruta de siempre.
+
+La página tiene **tres vistas** (barra lateral), una por público:
+
+- **Comercial** (lenguaje de negocio): *Panorama* (clientes con caída para revisar, facturación que se está perdiendo, clientes con riesgo de irse y pérdida esperada, caídas graves, nuevos en la lista, ya con otro comercializador, grandes clientes en vigilancia; mapa de Boyacá por municipio con la cifra elegida; de qué clases y tamaños viene el valor; qué cambió frente al mes anterior), *Clientes con riesgo de irse* (prioridad, municipio, factura hoy, probabilidad, por qué, situación; y aparte los grandes clientes no regulados), *Caídas de consumo* (consumía / consume ahora / caída / facturación que se pierde / gravedad / tendencia; arriba avisa cuántos clientes en cero o casi cero hay aparte), *Clientes sin consumo* (los de cero o casi cero sostenido: situación, consumía / consume ahora, lo que facturaban, último mes con consumo, meses sin consumo y una acción sugerida según el tiempo que llevan así; filtros por zona regional, municipio, situación, tiempo y tamaño), *Clientes que ya se fueron* (solo los que están con otro comercializador) y *Descargas*.
+- En todas las listas (Comercial, Soporte y Administrador) **un clic en una fila abre debajo la ficha del cliente**, con un botón para ir a *Consultar un cliente* / *Buscar cliente*. La gráfica de consumo muestra 18 meses reales y los 6 pronosticados. Las cifras van en formato colombiano (punto de miles, coma decimal) y los CSV se descargan con `;` y coma decimal para Excel en español; cada lista dice "Se muestran N de M".
+- **Soporte** (atención al cliente y campo): *Consultar un cliente* (ficha en lenguaje simple: dónde está, clase y tamaño, qué le pasa al consumo, riesgo de irse, avisos de autogenerador / no regulado / ya con otro comercializador, **qué revisar o qué decirle**, y la gráfica de consumo y pronóstico; con buscador por municipio, gravedad y tendencia), *Visitas por ciclo* (ruta de visita con municipio y dirección del TC1, orden por facturación perdida, filtros y mapa de los clientes del ciclo) y *Registrar resultado de visitas*.
+- **Administrador del modelo** (todo lo técnico): Resumen (cifras del corte, riesgo de fuga, trayectoria, estado en lista, valor por ciclo, severidad), Gestión por ciclo (lista operativa por ciclo con el nombre de la zona, filtrable por grupo de consumo y descargable), Ranking gerencial, **Riesgo de fuga** (lista filtrable por nivel, zona, grupo, clase y municipio; resumen por zona y grupo; los que ya están con otro comercializador y su perfil; vigilancia del mercado no regulado, que es donde viven los no regulados, fuera del ranking; calidad del modelo; seguimiento), Cortes (clase, estrato, zona, tramo), **Mapa** (municipios de Boyacá, sección 9b), Buscar cliente (ubicación, segmento, caída, posición en la lista, riesgo de fuga y pronóstico a 6 meses de un NIU, con aviso si es autogenerador o de mercado no regulado; el buscador de ejemplos muestra ciclo, zona y municipio de **todos** los clientes y la situación de cada uno en caída y en fuga, filtrable por grupo, segmento, ciclo, municipio, situación en caída y riesgo de fuga), Pronóstico 6 meses (totales proyectados y precisión por grupo de consumo), **Descargas por grupo** (los archivos de `11_exportes_negocio\`), Seguimiento, Retroalimentación y Estado del pipeline. Todas las tablas muestran zona, clase de servicio, tipo de medidor y de lectura, promedio semestral y valor facturado con los nombres del glosario. La carpeta de datos se toma de `EBSA_DATOS` o se cambia en la barra lateral.
 
 ## 11. Entorno
 

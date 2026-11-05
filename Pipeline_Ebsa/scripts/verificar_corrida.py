@@ -1,11 +1,11 @@
 """
 verificar_corrida.py — revisa que la última corrida dejó todo consistente
-
+=========================================================================
 Solo lee. Correr desde Pipeline_Ebsa después de pipeline_mensual.py:
 
-    python scripts\\verificar_corrida.py
+    python verificar_corrida.py
 
-Qué revisa (cada línea sale con OK, AVISO o ERROR):
+Qué revisa (cada línea sale con ✓ OK, ⚠ AVISO o ✗ ERROR):
   1. Histórico: meses sin huecos y el último mes con clientes normales.
   2. Cortes por zona (notebook 3): existen, y el corte urbano es el último mes del histórico.
   3. Pronóstico: una fila por cliente, cada zona con su corte, meses pronosticados
@@ -25,12 +25,16 @@ from pathlib import Path
 import pandas as pd
 import pyarrow.parquet as pq
 
+# Windows: si la salida va a un archivo o a otro proceso (simular_meses.py), Python usa
+# cp1252 y no puede escribir "✓" / "✗". Se fuerza UTF-8 en la salida de este script.
 import sys as _sys
 for _s in (_sys.stdout, _sys.stderr):
     try:
         _s.reconfigure(encoding="utf-8", errors="replace")
     except Exception:  # noqa: BLE001
         pass
+
+from utilidades.utilidades_glosario import CLASES_SIN_GESTION
 
 BASE = Path(os.environ.get("EBSA_DATOS", r"C:\Users\Home\Documents\Datos_Ebsa"))
 resultado = {"OK": 0, "AVISO": 0, "ERROR": 0}
@@ -171,7 +175,7 @@ if existe(ruta_caida, "el estudio de caída"):
     linea("OK", "veredictos: " + ", ".join(f"{k} {v:,}" for k, v in c["veredicto"].value_counts().items()))
 ruta_op = BASE / "07_gestion_caida" / "gestion_caida_operativa.csv"
 if existe(ruta_op, "la lista operativa"):
-    g = pd.read_csv(ruta_op, dtype={"NIU": "string"}, encoding="utf-8-sig")
+    g = pd.read_csv(ruta_op, dtype={"NIU": "string"}, encoding="utf-8-sig", low_memory=False)
     linea("OK", f"lista operativa: {len(g):,} clientes en {g['ciclo_etiqueta'].nunique()} ciclos")
     revisar_cortes(g, "lista operativa")
     for col in ["zona_nombre", "clase_servicio_nombre", "grupo_consumo", "tipo_medidor_nombre", "valor_facturado_mes"]:
@@ -179,6 +183,28 @@ if existe(ruta_op, "la lista operativa"):
     if "tiene_tarifa" in g.columns:
         sin = (~g["tiene_tarifa"].astype(str).str.lower().eq("true")).sum()
         linea("OK" if sin / max(len(g), 1) < 0.1 else "AVISO", f"clientes sin tarifa real en la lista: {int(sin):,}")
+    if "zona_nombre" in g.columns:
+        n_auto = int(g["zona_nombre"].astype(str).str.upper().eq("AUTOGENERADORES").sum())
+        linea("OK" if n_auto == 0 else "ERROR",
+              f"autogeneradores (ciclo 50) en la lista de caída: {n_auto:,} (deben ser 0: su caída no es gestionable)")
+    if "clase_servicio" in g.columns:
+        n_cl = int(g["clase_servicio"].astype(str).str.strip().str.upper().isin(CLASES_SIN_GESTION).sum())
+        linea("OK" if n_cl == 0 else "ERROR",
+              f"clases sin gestión {sorted(CLASES_SIN_GESTION)} en la lista de caída: {n_cl:,} (deben ser 0)")
+    if "consumo_reciente_kwh" in g.columns and "meses_ventana" in g.columns:
+        n_cero = int(((pd.to_numeric(g["consumo_reciente_kwh"], errors="coerce").fillna(0) <= 0)
+                      & (pd.to_numeric(g["meses_ventana"], errors="coerce").fillna(0) >= 3)).sum())
+        linea("OK" if n_cero == 0 else "ERROR", f"clientes en cero sostenido (3+ meses en 0) dentro de la lista de caída: {n_cero:,} (deben ser 0; van en clientes_cero_sostenido.csv)")
+    # casi cero sostenido (regla del 2026-10-07): ningún cliente de clientes_cero_sostenido.csv puede estar en la lista
+    _cs = BASE / "07_gestion_caida" / "clientes_cero_sostenido.csv"
+    if _cs.exists():
+        _nius_cs = set(pd.read_csv(_cs, usecols=["NIU"], dtype={"NIU": "string"})["NIU"].str.strip())
+        _en_ambas = len(_nius_cs & set(g["NIU"].astype("string").str.strip()))
+        linea("OK" if _en_ambas == 0 else "ERROR",
+              f"clientes en cero o casi cero sostenido que siguen en la lista de caída: {_en_ambas:,} (deben ser 0)")
+    _dup = int(g["NIU"].astype("string").str.strip().duplicated().sum())
+    linea("OK" if _dup == 0 else "ERROR", f"clientes repetidos en la lista operativa: {_dup:,} (deben ser 0)")
+    linea("OK" if "zona_regional" in g.columns else "AVISO", "columna zona_regional: " + ("presente" if "zona_regional" in g.columns else "FALTA (corre el paso 11 con la versión actual)"))
     copia = BASE / "07_gestion_caida" / "historial" / f"gestion_caida_operativa_corte_{CORTES.get('URBANO', pd.Timestamp('1900-01-01')):%Y-%m}.csv"
     linea("OK" if copia.exists() else "ERROR", f"copia versionada del corte: {copia.name}")
 
@@ -194,6 +220,20 @@ if existe(ruta_f, "el riesgo de fuga"):
     linea("OK" if copia.exists() else "ERROR", f"copia versionada del corte: {copia.name}")
     ya = BASE / "10_riesgo_fuga" / "clientes_con_otro_comercializador.csv"
     linea("OK" if ya.exists() else "AVISO", "lista de clientes con otro comercializador: " + ("presente" if ya.exists() else "no hay archivo de otros comercializadores"))
+    vig = BASE / "10_riesgo_fuga" / "vigilancia_mercado_no_regulado.csv"
+    if vig.exists():
+        v = pd.read_csv(vig, dtype={"NIU": "string"}, encoding="utf-8-sig", low_memory=False)
+        en_ranking = int(f["NIU"].str.strip().isin(v["NIU"].str.strip()).sum())
+        linea("OK" if en_ranking == 0 else "ERROR",
+              f"mercado no regulado: {len(v):,} en vigilancia, {en_ranking:,} de ellos dentro del ranking de fuga (deben ser 0)")
+        if "zona_nombre" in f.columns:
+            n33 = int(f["zona_nombre"].astype(str).str.upper().eq("USUARIOS NO REGULADOS").sum())
+            linea("OK" if n33 == 0 else "ERROR", f"clientes del ciclo 33 (no regulados) en el ranking: {n33:,} (deben ser 0)")
+        if "clase_servicio" in f.columns:
+            n_cl = int(f["clase_servicio"].astype(str).str.strip().str.upper().isin(CLASES_SIN_GESTION).sum())
+            linea("OK" if n_cl == 0 else "ERROR", f"clases sin gestión {sorted(CLASES_SIN_GESTION)} en el ranking de fuga: {n_cl:,} (deben ser 0)")
+    else:
+        linea("AVISO", "no existe vigilancia_mercado_no_regulado.csv")
 
 # ------------------------------------------------------------------ 7. exportes
 seccion("7. EXPORTES POR GRUPO (11_exportes_negocio)")
@@ -217,6 +257,21 @@ else:
     if sg.exists() and len(pd.read_csv(sg)):
         t = pd.read_csv(sg)
         linea("OK", f"seguimiento del pronóstico evaluado para cortes {sorted(t['fecha_corte'].astype(str).unique())}")
+        # Un mismo pronóstico no puede contarse dos veces: en cada corte y horizonte, los pares evaluados de una
+        # zona no pueden superar el número de clientes pronosticados de esa zona (corrección 2026-10-08).
+        _sz = BASE / "08_seguimiento" / "seguimiento_pronostico_por_zona.csv"
+        _p6 = BASE / "04_pronostico" / "modelo_final" / "predicciones_segmentadas_optimizadas_6_meses.parquet"
+        if _sz.exists() and _p6.exists():
+            try:
+                _z = pd.read_csv(_sz)
+                _pz = pd.read_parquet(_p6, columns=["zona"], engine="pyarrow")["zona"].astype(str).str.upper().value_counts()
+                _exceso = [f"{r.zona} corte {r.fecha_corte} h{r.horizonte}: {int(r.n):,} > {int(_pz.get(str(r.zona).upper(), 0) * 1.05):,}"
+                           for r in _z.itertuples() if r.n > _pz.get(str(r.zona).upper(), 0) * 1.05]
+                linea("OK" if not _exceso else "ERROR",
+                      "seguimiento sin pronósticos repetidos" if not _exceso
+                      else "seguimiento con más pares que clientes (pronósticos contados dos veces): " + "; ".join(_exceso[:3]))
+            except Exception as _e:
+                linea("AVISO", f"no se pudo comprobar la unicidad del seguimiento: {_e}")
     else:
         linea("AVISO", f"hay cortes guardados ({', '.join(cortes_prev)}) pero el seguimiento aún no tiene meses consolidados posteriores")
     sf = BASE / "10_riesgo_fuga" / "seguimiento_riesgo_fuga.csv"
@@ -248,3 +303,5 @@ elif resultado["AVISO"]:
     print("Sin errores. Los avisos son cosas para mirar, no para detenerse.")
 else:
     print("Todo consistente.")
+# Código de salida distinto de cero cuando hay errores, para que un script que lo llame pueda reaccionar
+_sys.exit(1 if resultado["ERROR"] else 0)

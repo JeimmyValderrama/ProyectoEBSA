@@ -1,5 +1,6 @@
 """
 utilidades_glosario.py — nombres de negocio para códigos del formato TC2 (GLOSARIO_EBSA.xlsx)
+============================================================================================
 
 Un solo lugar para traducir códigos a texto, de modo que las listas, los exportes
 y la página muestren lo mismo:
@@ -71,6 +72,28 @@ CICLO_NO_REGULADOS = 33
 CICLO_AUTOGENERADORES = 50
 CICLOS_SIN_GESTION = {CICLO_AUTOGENERADORES}
 
+# Clases de servicio que NO entran a las listas de gestión (caída y riesgo de fuga).
+# Experto de negocio (2026-10-02): AC área común y AU autoconsumos EBSA tienen consumo
+# atípico; RI distritos de riego dependen del clima y la temporada; PR provisionales pagan
+# por adelantado. Siguen en la serie y en el pronóstico (consumo del sistema), pero una
+# "caída" o una "fuga" en ellos no se gestiona. AP (alumbrado) ya sale en el notebook 3.
+CLASES_SIN_GESTION = {"AC", "AU", "RI", "PR"}
+
+# Zona regional: agrupa el ciclo urbano, el rural y los seccionales de una misma dirección
+# regional, que es quien decide las acciones en terreno (experto de negocio, 2026-10-02).
+# El ciclo detallado se conserva para las cuadrillas.
+ZONA_REGIONAL_POR_CICLO = {
+    0: "CENTRO", 9: "CENTRO", 10: "CENTRO", 19: "CENTRO",
+    1: "TUNDAMA", 11: "TUNDAMA",
+    2: "SUGAMUXI", 12: "SUGAMUXI",
+    3: "OCCIDENTE", 22: "OCCIDENTE",
+    4: "ORIENTE", 13: "ORIENTE",
+    5: "NORTE", 21: "NORTE",
+    6: "RICAURTE", 23: "RICAURTE",
+    7: "PUERTO BOYACA", 38: "PUERTO BOYACA",
+}
+ZONAS_REGIONALES = ["CENTRO", "TUNDAMA", "SUGAMUXI", "OCCIDENTE", "ORIENTE", "NORTE", "RICAURTE", "PUERTO BOYACA"]
+
 # ------------------------------------------------------------------------------
 # Grupos de consumo para negocio (mismos umbrales del perfil P0..P4 del pronóstico:
 # mediana de 12 meses; Pequeño < 500 kWh/mes, Mediano 500 a < 5.000, Grande >= 5.000)
@@ -141,6 +164,16 @@ def nombre_zona(ciclo: pd.Series) -> pd.Series:
     return nombres
 
 
+def nombre_zona_regional(ciclo: pd.Series) -> pd.Series:
+    """Zona regional (8 direcciones) a partir del ciclo; los ciclos sin dirección (33, 50, internos) quedan como su nombre de glosario."""
+    c = _a_entero(ciclo)
+    reg = c.map(ZONA_REGIONAL_POR_CICLO)
+    sin = c.notna() & reg.isna()
+    reg = reg.astype("object")
+    reg[sin] = c[sin].map(ZONA_POR_CICLO).fillna("SIN ZONA")
+    return reg
+
+
 def nombre_clase(clase: pd.Series) -> pd.Series:
     c = clase.astype("string").str.strip().str.upper()
     c = c.str.replace(r"^0+(\.0+)?$", "0", regex=True)      # 0, 00, 0.0 -> "0" (SIN CLASIFICAR)
@@ -172,6 +205,8 @@ def enriquecer_glosario(df: pd.DataFrame, consumo_col: str | None = None) -> pd.
     d = df.copy()
     if "ciclo" in d.columns and "zona_nombre" not in d.columns:
         d["zona_nombre"] = nombre_zona(d["ciclo"])
+    if "ciclo" in d.columns and "zona_regional" not in d.columns:
+        d["zona_regional"] = nombre_zona_regional(d["ciclo"])
     if "clase_servicio" in d.columns and "clase_servicio_nombre" not in d.columns:
         d["clase_servicio_nombre"] = nombre_clase(d["clase_servicio"])
     if "tipo_medidor" in d.columns and "tipo_medidor_nombre" not in d.columns:
@@ -258,7 +293,7 @@ def atributos_ultimo_mes(historico_dir: Path | str, meses_atras: int = 3, nius=N
 
 
 COLUMNAS_GLOSARIO_SALIDA = [
-    "zona_nombre", "clase_servicio_nombre", "grupo_consumo", "tipo_medidor_nombre", "tipo_lectura_nombre",
+    "zona_nombre", "zona_regional", "clase_servicio_nombre", "grupo_consumo", "tipo_medidor_nombre", "tipo_lectura_nombre",
     "tipo_factura_nombre", "consumo_promedio_semestral_kwh", "valor_facturado_mes", "valor_facturado_origen",
 ]
 

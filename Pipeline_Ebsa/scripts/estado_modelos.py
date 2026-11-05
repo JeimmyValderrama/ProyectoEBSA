@@ -1,8 +1,9 @@
 """
 estado_modelos.py — ¿toca reentrenar? Un veredicto por modelo, sin correr nada
+==============================================================================
 Solo lee las salidas que ya dejó la última corrida. Correr desde Pipeline_Ebsa:
 
-    python scripts\\estado_modelos.py
+    python estado_modelos.py
 
 Para cada modelo dice cuándo se entrenó, con qué corte va la corrida actual, qué
 dice el seguimiento en vivo, y termina con una recomendación:
@@ -11,13 +12,16 @@ dice el seguimiento en vivo, y termina con una recomendación:
   REENTRENAR  : hay una razón clara; el comando exacto sale al final.
 
 Reglas (las mismas que usan los notebooks para avisar):
-  Pronóstico   : > 6 meses sin reentrenar; o WAPE en vivo por encima del backtest
+  Pronóstico   : > 12 meses sin reentrenar; o WAPE en vivo por encima del backtest
                  (dif_vs_backtest_pp > 5) en la mayoría de los horizontes durante 2+ cortes.
-  Agrupamiento : > 6 meses sin reentrenar (los segmentos se mantienen estables a propósito).
+  Agrupamiento : > 12 meses sin reentrenar (los segmentos se mantienen estables a propósito).
   Caída        : algún segmento cambiaría de criterio, o umbrales que se movieron > 10 puntos
-                 (deriva_criterios_caida.csv, que se recalcula cada mes en modo aplicar).
-  Riesgo de fuga: > 6 meses sin reentrenar; o el archivo de otros comercializadores trae más
-                 casos que los que vio el modelo; o los señalados ALTO no se van más que la tasa base.
+                 (deriva_criterios_caida.csv, que se recalcula cada mes en modo aplicar; una deriva medida
+                 antes del último recálculo de criterios no cuenta).
+  Riesgo de fuga: > 12 meses sin reentrenar; o el archivo de otros comercializadores es más nuevo
+                 que el modelo y trae salidas en meses que el modelo no pudo ver (el notebook 14 solo
+                 aprende de los cortes cuya ventana de 6 meses cabe dentro del archivo); o los
+                 señalados ALTO no se van más que la tasa base.
 """
 import os
 import re
@@ -26,6 +30,8 @@ from pathlib import Path
 import joblib
 import pandas as pd
 
+# Windows: si la salida va a un archivo o a otro proceso (simular_meses.py), Python usa
+# cp1252 y no puede escribir "✓" / "✗". Se fuerza UTF-8 en la salida de este script.
 import sys as _sys
 for _s in (_sys.stdout, _sys.stderr):
     try:
@@ -34,7 +40,12 @@ for _s in (_sys.stdout, _sys.stderr):
         pass
 
 BASE = Path(os.environ.get("EBSA_DATOS", r"C:\Users\Home\Documents\Datos_Ebsa"))
-MESES_MAX = 6
+# Tope de antigüedad antes de sugerir reentrenar por calendario. Política acordada por el equipo
+# (informe, Anexo E.3): pronóstico y agrupamiento una vez al año o cuando el seguimiento lo pida; la
+# simulación de 11 cortes mostró que la edad del modelo no explica el error (reentrenar a los 8 meses movió
+# 0,1 puntos de WAPE). Los demás disparadores (error en vivo por encima del backtest, deriva de umbrales,
+# salidas nuevas de fuga) siguen activos y no dependen de este tope.
+MESES_MAX = 12
 veredictos = {}
 
 
@@ -74,6 +85,11 @@ if ruta.exists():
     if seg.exists() and len(pd.read_csv(seg)):
         s = pd.read_csv(seg)
         s["fecha_corte"] = s["fecha_corte"].astype(str)
+        # P4 (sin historia suficiente) no tiene modelo: su pronóstico es la línea base y su "backtest" es un
+        # error de 74-142 %, así que en vivo siempre sale "mejor" y diluía la señal de los perfiles que sí
+        # tienen modelo (corrección 2026-10-08).
+        if "perfil" in s.columns:
+            s = s[~s["perfil"].astype(str).str.startswith("P4")]
         por_corte = (s.groupby("fecha_corte")
                      .agg(horizontes=("horizonte", "nunique"),
                           malos=("dif_vs_backtest_pp", lambda x: int((x > 5).sum())),
@@ -136,7 +152,14 @@ if ruta.exists():
     print(f"  Criterios calculados el {str(c.get('fecha_calculo', ''))[:10]} con ventana hasta "
           f"{str(c['ventana'].get('corte_urbano', c['ventana'].get('fin_efectivo', '')))[:7]}")
     deriva = BASE / "06_estudio_caida" / "deriva_criterios_caida.csv"
-    if deriva.exists():
+    # La deriva se mide en modo aplicar (umbrales guardados vs. recalculados). Si los criterios se recalcularon
+    # DESPUÉS de esa medición (reentrenar --solo 10,...), el archivo de deriva describe a los criterios viejos y
+    # no debe volver a pedir reentrenar: la deriva vigente se medirá en la próxima corrida mensual en modo aplicar.
+    deriva_vieja = deriva.exists() and deriva.stat().st_mtime < ruta.stat().st_mtime
+    if deriva.exists() and deriva_vieja:
+        print("  Deriva: la última medición es anterior al recálculo de los criterios (modo reentrenar); "
+              "ya no aplica. Se vuelve a medir en la próxima corrida mensual en modo aplicar.")
+    elif deriva.exists():
         d = pd.read_csv(deriva)
         cambian = d[d["cambia_criterio"].astype(str).str.lower().eq("true")]
         movidos = d[pd.to_numeric(d["dif_umbral_pct"], errors="coerce").abs() > 10]
@@ -169,15 +192,39 @@ if ruta.exists():
         razones.append(f"lleva {edad} meses sin reentrenar (tope {MESES_MAX})")
     if str(info["metodo"]).startswith("SIMILITUD"):
         revisar.append("se está usando similitud (menos de 20 ejemplos): reentrenar en cuanto el archivo traiga más casos")
-    # ¿hay más ejemplos que los que vio el modelo?
+    # ¿El archivo de otros comercializadores trae salidas que el modelo no pudo aprender?
+    # El notebook 14 solo entrena con los cortes cuya ventana de 6 meses cabe dentro del archivo
+    # (si el archivo termina en 2025-08, el último corte útil es 2025-02). Por eso NO sirve comparar
+    # "salidas conocidas hoy" contra "las que vio el modelo": las salidas anteriores al primer corte
+    # (antes de 2023-02) y las de clientes fuera de la población elegible nunca entran al modelo, y
+    # ese conteo pedía reentrenar sin que hubiera nada nuevo que aprender. La señal correcta es: el
+    # archivo cambió después de entrenar y contiene salidas posteriores al último mes que el modelo vio.
     etq = BASE / "10_riesgo_fuga" / "etiquetas_salida_por_niu.csv"
     if etq.exists():
-        e = pd.read_csv(etq, usecols=["mes_salida"])
-        n_ahora = int(e["mes_salida"].notna().sum())
+        e = pd.read_csv(etq, low_memory=False)      # sin usecols: pandas 3 falla con usecols + columnas mixtas
+        salidas = pd.to_datetime(e["mes_salida"], errors="coerce").dropna()
+        fin_archivo = pd.to_datetime(e["ultimo_mes_otro"], errors="coerce").max() if "ultimo_mes_otro" in e.columns else pd.NaT
         n_modelo = int(info.get("n_positivos_niu", 0))
-        print(f"  Clientes con salida conocida hoy: {n_ahora} | que vio el modelo al entrenar: {n_modelo}")
-        if n_ahora >= n_modelo * 1.15 and n_ahora - n_modelo >= 10:
-            razones.append(f"hay {n_ahora - n_modelo} casos nuevos de salida que el modelo no vio")
+        # último mes de salida que el modelo pudo ver: lo guarda el bundle desde octubre de 2026; si no está,
+        # se toma el último mes del archivo que existía al entrenar (el archivo no cambió si es más viejo que el modelo)
+        fin_modelo = info.get("ultimo_mes_salida_observable")
+        archivos_otros = sorted((BASE / "00_otros_comercializadores").glob("*.xls*"))
+        entrenado = pd.Timestamp(info.get("entrenado_en")) if info.get("entrenado_en") else None
+        archivo_mas_nuevo = bool(archivos_otros and entrenado is not None
+                                 and max(pd.Timestamp(a.stat().st_mtime, unit="s") for a in archivos_otros) > entrenado)
+        print(f"  Clientes con salida conocida hoy: {len(salidas)} | que el modelo usó al entrenar: {n_modelo} "
+              f"(los anteriores al primer corte y los de clases no elegibles no se aprenden)")
+        if pd.notna(fin_archivo):
+            print(f"  Archivo de otros comercializadores hasta {fin_archivo:%Y-%m}"
+                  + (" (más nuevo que el modelo)" if archivo_mas_nuevo else " (el mismo que vio el modelo)"))
+        if fin_modelo:
+            nuevas = int((salidas > pd.Timestamp(fin_modelo)).sum())
+            if nuevas:
+                razones.append(f"el archivo trae {nuevas} salidas posteriores a {fin_modelo}, que el modelo no pudo ver")
+        elif archivo_mas_nuevo and pd.notna(fin_archivo):
+            # bundle antiguo (sin ventana guardada): solo se avisa si el archivo cambió después de entrenar
+            revisar.append(f"el archivo de otros comercializadores cambió después de entrenar el modelo "
+                           f"(ahora llega a {fin_archivo:%Y-%m}): reentrenar para incorporar las salidas nuevas")
     seg = BASE / "10_riesgo_fuga" / "seguimiento_riesgo_fuga.csv"
     if seg.exists() and len(pd.read_csv(seg)):
         s = pd.read_csv(seg)
@@ -190,8 +237,13 @@ if ruta.exists():
                 print(f"  Seguimiento con ventana completa: ALTO se fue el {pa:.1f}% vs tasa base {pb:.1f}%")
                 if pb > 0 and pa < 2 * pb:
                     razones.append(f"los señalados ALTO no se van claramente más que la tasa base ({pa:.1f}% vs {pb:.1f}%)")
+        elif "observable" in s.columns and s["observable"].astype(str).str.startswith("NO").all():
+            # el archivo de otros comercializadores termina antes de las listas guardadas: no hay salidas que observar
+            hasta = str(s["salidas_conocidas_hasta"].iloc[0]) if "salidas_conocidas_hasta" in s.columns else "?"
+            revisar.append(f"el seguimiento no puede observar salidas: el archivo de otros comercializadores llega hasta {hasta} "
+                           f"y las listas guardadas son posteriores; pedir a la empresa una versión actualizada")
         else:
-            print("  Seguimiento: hay cortes anteriores pero ninguno con la ventana de 6 meses completa todavía.")
+            print("  Seguimiento: hay cortes anteriores pero ninguno con la ventana de 6 meses completa y observable todavía.")
     else:
         print("  Seguimiento: todavía sin cortes anteriores.")
     if razones:
