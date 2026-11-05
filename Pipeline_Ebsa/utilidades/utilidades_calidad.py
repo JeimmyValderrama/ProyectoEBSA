@@ -18,7 +18,7 @@ salidas equivocadas.
 Uso (Reconstruccion_serie_tiempo_consumo_rural.ipynb, después de unir los
 historico_YYYY.parquet):
 
-    from utilidades_calidad import validar_mes_entrante
+    from utilidades.utilidades_calidad import validar_mes_entrante
 
     reporte = validar_mes_entrante(historico, ciclos_conocidos=CICLOS_CONOCIDOS)
     reporte.to_csv(ruta_reporte, index=False, encoding="utf-8-sig")
@@ -292,7 +292,7 @@ def validar_mes_entrante(
     filas.append(_fila(
         "ciclos_nuevos", "ERROR", not nuevos, len(ciclos_mes), len(ciclos_conocidos),
         f"ciclos no clasificados: {nuevos} -> añadirlos a CICLOS_RURALES o dejarlos urbanos en "
-        "Preprocesamiento, y a CICLOS_CONOCIDOS en utilidades_calidad.py"
+        "Preprocesamiento, y a CICLOS_CONOCIDOS en utilidades.utilidades_calidad.py"
         if nuevos else "todos los ciclos del mes son conocidos",
     ))
 
